@@ -1,0 +1,9 @@
+fastapi==0.112.2
+uvicorn[standard]==0.30.6
+sqlalchemy==2.0.34
+psycopg[binary]
+alembic==1.13.2
+pydantic==2.9.1
+firebase-admin==6.5.0
+python-dotenv==1.0.1
+httpx==0.27.2
