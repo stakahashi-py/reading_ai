@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>読む</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    header { padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }
+    .container { padding: 16px; display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+    .para { padding: 10px; border-radius: 6px; }
+    .para:hover { background: #fafafa; }
+    .muted { color: #666; font-size: 12px; }
+    button { padding: 6px 10px; border: 1px solid #ddd; background: #fff; border-radius: 6px; cursor: pointer; }
+    #side { position: sticky; top: 0; height: calc(100vh - 60px); overflow:auto; border-left:1px solid #eee; padding-left: 16px; }
+    pre { white-space: pre-wrap; }
+    .skeleton { background: linear-gradient(90deg,#f0f0f0 25%,#e8e8e8 37%,#f0f0f0 63%); background-size:400% 100%; animation: shimmer 1.4s ease infinite; border:1px solid #eee; border-radius:6px; }
+    @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+  </style>
+  <script>
+    function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
+    let bookId = parseInt(qs('book_id') || '0', 10);
+    let selectedPara = null;
+    let offset = 0; const limit = 50; let loading=false; let total=0;
+    let restorePercent = null; let restored=false;
+
+    async function loadBook() {
+      const meta = await (await fetch(`/v1/books/${bookId}`)).json();
+      document.getElementById('title').textContent = meta.title || 'Untitled';
+      document.getElementById('author').textContent = meta.author || '';
+      try {
+        const pr = await (await fetch(`/v1/progress?book_id=${bookId}`)).json();
+        restorePercent = (typeof pr.scroll_percent === 'number') ? pr.scroll_percent : null;
+      } catch (e) { restorePercent = null; }
+      document.getElementById('paras').innerHTML = '';
+      offset = 0; total = 0; restored=false; await loadMore();
+    }
+
+    function selectPara(p){
+      selectedPara = p;
+      document.getElementById('selected').textContent = `選択中: #${p.idx}`;
+      document.getElementById('qa-input').value = '';
+      document.getElementById('trans-out').textContent = '';
+      document.getElementById('qa-out').textContent = '';
+    }
+
+    async function doTranslate(){
+      if(!selectedPara){ alert('段落を選択してください'); return; }
+      const res = await fetch('/v1/translate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: selectedPara.id})});
+      const data = await res.json();
+      document.getElementById('trans-out').textContent = data.translation || '';
+    }
+
+    async function doQA(){
+      const q = document.getElementById('qa-input').value.trim();
+      if(!q){ alert('質問を入力してください'); return; }
+      const res = await fetch('/v1/qa', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, question: q})});
+      const data = await res.json();
+      document.getElementById('qa-out').textContent = data.answer || '';
+    }
+
+    async function saveHighlight(){
+      if(!selectedPara){ alert('段落を選択してください'); return; }
+      await fetch('/v1/highlights', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: selectedPara.id, span_start: 0, span_end: selectedPara.text.length})});
+      alert('ハイライトを保存しました（段落全体）');
+    }
+
+    // Image generation from selected paragraph
+    let imgController = null;
+    async function generateImage(){
+      if(!selectedPara){ alert('段落を選択してください'); return; }
+      const btn = document.getElementById('gen-btn');
+      const cancel = document.getElementById('gen-cancel');
+      const status = document.getElementById('gen-status');
+      const skel = document.getElementById('gen-img-skel');
+      const img = document.getElementById('gen-img');
+      btn.disabled = true; cancel.disabled = false; status.textContent = '生成中…'; skel.style.display = 'block'; img.src = '';
+      imgController = new AbortController();
+      try{
+        const res = await fetch('/v1/generate/image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source: selectedPara.text}), signal: imgController.signal});
+        if (!res.ok){ throw new Error('request failed'); }
+        const data = await res.json();
+        let url = data.asset_url || '';
+        if (url.startsWith('gs://')){
+          const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
+          if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; }
+        }
+        img.src = url; img.alt='generated image';
+        status.textContent = '完了';
+      }catch(e){
+        status.textContent = (e.name === 'AbortError') ? 'キャンセルしました' : '失敗';
+      } finally {
+        skel.style.display = 'none'; btn.disabled = false; cancel.disabled = true; imgController = null;
+      }
+    }
+    function cancelImage(){ if (imgController) imgController.abort(); }
+
+    async function loadMore(){
+      if (loading) return; loading=true;
+      const res = await fetch(`/v1/books/${bookId}/paragraphs?offset=${offset}&limit=${limit}`);
+      const data = await res.json();
+      total = data.total || 0;
+      const list = document.getElementById('paras');
+      for (const p of data.items || []) {
+        const el = document.createElement('div');
+        el.className = 'para';
+        el.dataset.paraId = p.id;
+        el.dataset.idx = p.idx;
+        el.innerHTML = `<div class="muted">#${p.idx}</div><div>${p.text.replaceAll('\n','<br/>')}</div>`;
+        el.addEventListener('click', ()=> selectPara(p));
+        list.appendChild(el);
+      }
+      offset += (data.items || []).length;
+      loading=false;
+      // restore scroll position once
+      if (!restored && restorePercent != null && total > 0) {
+        const targetIdx = Math.max(0, Math.floor((total * restorePercent) / 100) - 2);
+        if (offset >= targetIdx) {
+          const targetEl = document.querySelector(`.para[data-idx="${targetIdx}"]`);
+          if (targetEl) { targetEl.scrollIntoView({behavior:'instant', block:'start'}); restored=true; }
+        } else {
+          loadMore();
+        }
+      }
+    }
+
+    function onScroll(){
+      const sc = document.documentElement.scrollTop || document.body.scrollTop;
+      const sh = document.documentElement.scrollHeight || document.body.scrollHeight;
+      const ch = document.documentElement.clientHeight || window.innerHeight;
+      const percent = Math.min(100, Math.round((sc/(sh-ch))*100));
+      maybeSaveProgress(percent);
+      if (!loading && offset < total && (sh - (sc + ch) < 300)) {
+        loadMore();
+      }
+    }
+
+    let lastSaved = -1; let saveTimer=null;
+    function maybeSaveProgress(percent){
+      if (Math.abs(percent - lastSaved) < 5) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(async ()=>{
+        lastSaved = percent;
+        await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent})});
+      }, 500);
+    }
+
+    window.addEventListener('DOMContentLoaded', ()=>{ loadBook(); window.addEventListener('scroll', onScroll, {passive:true}); });
+
+    async function generateVideo(){
+      if(!selectedPara){ alert('段落を選択してください'); return; }
+      const btn = document.getElementById('vid-btn');
+      const cancel = document.getElementById('vid-cancel');
+      const status = document.getElementById('vid-status');
+      const skel = document.getElementById('gen-video-skel');
+      const vid = document.getElementById('gen-video');
+      btn.disabled = true; cancel.disabled = false; status.textContent = '生成中…'; skel.style.display='block'; vid.src='';
+      const aspect = document.getElementById('vid-aspect').value;
+      vidController = new AbortController();
+      try{
+        const res = await fetch('/v1/generate/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source: selectedPara.text, aspect}), signal: vidController.signal});
+        if (!res.ok){ throw new Error('request failed'); }
+        const data = await res.json();
+        let url = data.asset_url || (data.video_uris && data.video_uris[0]) || '';
+        if (url.startsWith('gs://')){
+          const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
+          if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; }
+        }
+        vid.src = url;
+        status.textContent = '完了';
+      }catch(e){
+        status.textContent = (e.name === 'AbortError') ? 'キャンセルしました' : '失敗';
+      } finally {
+        skel.style.display='none'; btn.disabled = false; cancel.disabled = true; vidController = null;
+      }
+    }
+    function cancelVideo(){ if (vidController) vidController.abort(); }
+  </script>
+</head>
+<body>
+  <header>
+    <a href="/web/index.html">← 戻る</a>
+    <div>
+      <div id="title" style="font-weight:bold"></div>
+      <div id="author" class="muted"></div>
+    </div>
+  </header>
+  <div class="container">
+    <div id="main">
+      <div id="paras">読み込み中…</div>
+    </div>
+    <div id="side">
+      <div id="selected" class="muted">選択中: なし</div>
+      <div style="margin-top:12px;">
+        <button onclick="doTranslate()">ここだけ訳す</button>
+        <button onclick="saveHighlight()" style="margin-left:8px;">段落をハイライト</button>
+        <pre id="trans-out"></pre>
+      </div>
+      <div style="margin-top:12px;">
+        <button id="gen-btn" onclick="generateImage()">挿絵を生成</button>
+        <button id="gen-cancel" onclick="cancelImage()" disabled>キャンセル</button>
+        <div id="gen-status" class="muted" style="margin-top:6px;"></div>
+        <div style="margin-top:6px;">
+          <div id="gen-img-skel" class="skeleton" style="width:100%;height:200px;display:none;"></div>
+          <img id="gen-img" style="max-width:100%;border:1px solid #eee;border-radius:6px;"/>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <div class="muted" style="margin-bottom:6px;">動画（Veo）</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <select id="vid-aspect" style="padding:6px 8px; border:1px solid #ddd; border-radius:6px;">
+            <option value="1:1">1:1</option>
+            <option value="16:9" selected>16:9</option>
+            <option value="9:16">9:16</option>
+          </select>
+          <button id="vid-btn" onclick="generateVideo()">動画を生成</button>
+          <button id="vid-cancel" onclick="cancelVideo()" disabled>キャンセル</button>
+        </div>
+        <div id="vid-status" class="muted" style="margin-top:6px;"></div>
+        <div style="margin-top:6px;">
+          <div id="gen-video-skel" class="skeleton" style="width:100%;height:200px;display:none;"></div>
+          <video id="gen-video" style="max-width:100%;border:1px solid #eee;border-radius:6px;" controls></video>
+        </div>
+      </div>
+      <div style="margin-top:12px;">
+        <input id="qa-input" placeholder="質問を入力" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;" />
+        <div style="margin-top:6px;"><button onclick="doQA()">質問する</button></div>
+        <pre id="qa-out"></pre>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from .db.session import engine
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-from .routers import v1
+from .routers import api_v1 as v1
 
 app = FastAPI(title="AI Bunko Reader API", version="0.1.0")
 
@@ -22,6 +23,9 @@ def healthz():
 
 
 app.include_router(v1.router, prefix="/v1")
+
+# Serve static web (simple MVP)
+app.mount("/web", StaticFiles(directory="web", html=True), name="web")
 
 
 @app.get("/healthz/db")

@@ -5,3 +5,5 @@
 /test.ipynb
 /接続用コード.txt
 /aozora_html
+**/__pycache__/**
+.DS_Store

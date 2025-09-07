@@ -46,6 +46,8 @@ def verify_token(id_token: str) -> Optional[dict]:
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(auth_scheme)):
     if not credentials:
+        if AUTH_DISABLED:
+            return {"uid": "dev-user"}
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authorization")
     token = credentials.credentials
     return verify_token(token)
@@ -59,4 +61,3 @@ def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials
         return verify_token(token)
     except HTTPException:
         return None
-

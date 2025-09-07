@@ -14,4 +14,3 @@ router.include_router(generate.router, prefix="/generate", tags=["generate"])
 router.include_router(gallery.router, prefix="", tags=["gallery"])
 router.include_router(progress.router, prefix="", tags=["progress"])
 router.include_router(feedback.router, prefix="", tags=["feedback"])
-

@@ -111,3 +111,17 @@ class QALog(Base):
     latency_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+
+class GenerationJob(Base):
+    __tablename__ = "generation_jobs"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(128), nullable=False)
+    job_type = Column(String(16), nullable=False)  # image | video
+    status = Column(String(16), nullable=False, default="queued")
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="SET NULL"), nullable=True)
+    prompt = Column(Text, nullable=True)
+    payload = Column(JSON, nullable=True)
+    result = Column(JSON, nullable=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

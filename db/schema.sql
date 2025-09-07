@@ -124,3 +124,18 @@ CREATE INDEX IF NOT EXISTS idx_books_tags_gin ON books USING gin (tags);
 CREATE INDEX IF NOT EXISTS idx_books_title_trgm ON books USING gin (title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_books_author_trgm ON books USING gin (author gin_trgm_ops);
 
+-- Generation jobs queue (image/video)
+CREATE TABLE IF NOT EXISTS generation_jobs (
+  id           SERIAL PRIMARY KEY,
+  user_id      VARCHAR(128) NOT NULL,
+  job_type     VARCHAR(16) NOT NULL, -- image | video
+  status       VARCHAR(16) NOT NULL DEFAULT 'queued', -- queued|running|succeeded|failed
+  book_id      INTEGER REFERENCES books(id) ON DELETE SET NULL,
+  prompt       TEXT,
+  payload      JSONB,
+  result       JSONB,
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  created_at   TIMESTAMP NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_status ON generation_jobs (status, created_at);

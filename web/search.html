@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>検索</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    header { padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }
+    .container { padding: 16px; max-width: 960px; margin: 0 auto; }
+    .row { display:flex; gap:8px; flex-wrap: wrap; }
+    input, select, button { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; }
+    button { background:#111; color:#fff; cursor:pointer; }
+    .result { padding: 12px; border: 1px solid #eee; border-radius: 8px; margin-top: 12px; }
+    .muted { color: #666; font-size: 12px; }
+    a.btn { display: inline-block; padding: 6px 10px; background: #111; color: #fff; border-radius: 6px; text-decoration: none; font-size: 14px; }
+  </style>
+  <script>
+    function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
+    function setQS(params){ const p=new URLSearchParams(params); history.replaceState(null,'',`?${p.toString()}`); }
+
+    let sOffset = 0; const sLimit = 10; let lastBody = null; let loading=false; let total=0;
+
+    async function search(){
+      const q = document.getElementById('q').value.trim();
+      const author = document.getElementById('author').value.trim();
+      const era = document.getElementById('era').value;
+      const genre = document.getElementById('genre').value;
+      setQS({q, author, era, genre});
+      const body = { query: q };
+      if (author) body.author = author;
+      if (era) body.era = era;
+      if (genre) body.genre = genre;
+      document.getElementById('results').innerHTML = '検索中…';
+      sOffset = 0; lastBody = body; await loadMore();
+    }
+
+    async function loadMore(){
+      if (loading) return; loading = true;
+      const res = await fetch('/v1/search/llm', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({...lastBody, offset: sOffset, limit: sLimit}) });
+      const data = await res.json();
+      total = data.total || 0;
+      renderResults(data.items || [], sOffset === 0);
+      sOffset += (data.items || []).length;
+      loading = false;
+      renderLoadMore();
+    }
+
+    function renderLoadMore(){
+      const box = document.getElementById('more');
+      box.innerHTML = '';
+      if (sOffset < total){
+        const btn = document.createElement('button');
+        btn.textContent = 'もっと見る';
+        btn.onclick = loadMore;
+        box.appendChild(btn);
+      }
+    }
+
+    function renderResults(items, reset){
+      const box = document.getElementById('results');
+      if (reset) box.innerHTML='';
+      if (!items.length){ box.textContent='該当なし'; return; }
+      for (const it of items){
+        const el = document.createElement('div');
+        const subtitle = [it.author, it.era].filter(Boolean).join(' / ');
+        el.className = 'result';
+        el.innerHTML = `
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+            <div>
+              <div><strong>${it.title || 'Untitled'}</strong></div>
+              <div class="muted">${subtitle}</div>
+              ${it.tags && it.tags.length ? `<div class="muted">タグ: ${it.tags.join(', ')}</div>` : ''}
+              ${it.snippet ? `<div style="margin-top:6px;">${it.snippet.replaceAll('\n', ' ')}</div>` : ''}
+            </div>
+            <div style="text-align:right">
+              ${typeof it.score==='number' ? `<div class="muted">score: ${it.score.toFixed(3)}</div>` : ''}
+              <div style="margin-top:6px"><a class="btn" href="/web/read.html?book_id=${it.id}">読む</a></div>
+            </div>
+          </div>
+        `;
+        box.appendChild(el);
+      }
+    }
+
+    function restoreFromQS(){
+      const q = qs('q') || '';
+      const author = qs('author') || '';
+      const era = qs('era') || '';
+      const genre = qs('genre') || '';
+      document.getElementById('q').value = q;
+      document.getElementById('author').value = author;
+      if (era) document.getElementById('era').value = era;
+      if (genre) document.getElementById('genre').value = genre;
+      if (q || author || era || genre) search();
+    }
+
+    function onKey(e){ if (e.key==='Enter'){ e.preventDefault(); search(); } }
+
+    async function loadFilters(){
+      const selEra = document.getElementById('era');
+      const selTag = document.getElementById('genre');
+      try{
+        const res = await fetch('/v1/books/filters');
+        const data = await res.json();
+        for (const e of (data.eras || [])){
+          const opt = document.createElement('option'); opt.value = e; opt.textContent = e; selEra.appendChild(opt);
+        }
+        for (const t of (data.tags || [])){
+          const opt = document.createElement('option'); opt.value = t; opt.textContent = t; selTag.appendChild(opt);
+        }
+      }catch(e){}
+    }
+
+    window.addEventListener('DOMContentLoaded', async ()=>{ await loadFilters(); restoreFromQS(); });
+  </script>
+</head>
+<body>
+  <header>
+    <a href="/web/index.html">← 戻る</a>
+    <strong>検索</strong>
+  </header>
+  <div class="container">
+    <div class="row" style="gap:8px;">
+      <input id="q" placeholder="キーワード/自然文" style="flex:1;min-width:220px;" onkeydown="onKey(event)" />
+      <input id="author" placeholder="作者（部分一致）" style="width:200px" onkeydown="onKey(event)" />
+      <select id="era" style="width:140px">
+        <option value="">時代</option>
+      </select>
+      <select id="genre" style="width:160px">
+        <option value="">タグ</option>
+      </select>
+      <button onclick="search()">検索</button>
+    </div>
+    <div id="results" style="margin-top:16px;">条件を入力して検索してください。</div>
+    <div id="more" style="margin:16px 0;"></div>
+  </div>
+</body>
+</html>

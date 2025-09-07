@@ -12,6 +12,7 @@ Structure
 - `db/schema.sql`: Raw SQL to create all tables, extensions, and indexes
 - `workers/generator`: Stub for image/video generation jobs
 - `ingestor/aozora`: Stub for Aozora ingestion pipeline
+- `web/`: Minimal static frontend (books list, reading view)
 
 Setup (local)
 1. Python env and deps
@@ -20,21 +21,37 @@ Setup (local)
 2. Configure env
    - Copy `.env.example` to `.env` and edit values (or export env vars)
 3. Database schema (raw SQL)
-   - Ensure PostgreSQL is reachable
-   - Set `PSQL_URL` in your environment (see `.env.example`)
-   - Apply schema: `make db-apply`
+   - Ensure PostgreSQL/Cloud SQL is reachable
+   - If using Cloud SQL connector (recommended): set `.env` with `CONNECTION_NAME`, `DB_USER`, `DB_NAME`, `DB_PASS` (or IAM auth)
+   - Or set `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db`
+   - Apply schema: `make db-apply` (or `python scripts/apply_schema.py`)
 4. Run API
-   - `make run-api` and open `http://localhost:8000/healthz`
+   - `make run-api` and open `http://localhost:8000/web/index.html`
 
 Auth
 - Firebase Auth tokens are verified by default.
-- For local dev, you can set `AUTH_DISABLED=true` to bypass authentication.
+- For local dev, set `AUTH_DISABLED=true` to bypass authentication. When enabled, endpoints that require auth accept missing Authorization and act as a dev user.
 
 Notes
 - Vector columns (`paragraphs.embed`, `tastes.vector`) are created as `vector` in `db/schema.sql` (requires `pgvector`). ORM currently uses generic JSON placeholders; we can add `sqlalchemy-pgvector` later for strong typing.
 - Generation and embedding logic are stubs; connect to Vertex AI and Cloud Tasks in subsequent steps.
+- Gemini (google-genai) backs `/v1/translate` and `/v1/qa`. Set `PROJECT_ID` and `VERTEX_LOCATION` envs for Vertex AI.
+
+Frontend (MVP)
+- Navigate to `/web/index.html` for books, then open a book to read and try:
+  - Translate a selected paragraph via `/v1/translate`
+  - Ask QA via `/v1/qa`
+- Search UI is available at `/web/search.html` (query, author/era/tag filters). Results link to reading view.
+
+Generation Jobs
+- `POST /v1/generate/image|video` enqueues a DB job in `generation_jobs`.
+- `GET /v1/generate/{job_id}/status` returns current status/result.
+- Worker is a stub; connect to Vertex Imagen/Veo and update job status in a background service.
 
 Next
 - Implement Librarian (hybrid search) and Recommender logic
 - Connect Cloud Tasks and job status persistence
 - Add embedding worker and ingestion CLI
+- DB connections
+  - API uses Cloud SQL connector when `CONNECTION_NAME/DB_USER/DB_NAME` are set (driver: pg8000). Otherwise falls back to `DATABASE_URL`.
+  - The ingestion script `ingest_aozora_html.py` uses the same connector style for consistency.
