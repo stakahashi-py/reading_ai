@@ -210,7 +210,6 @@ def generate_image(
     db.commit()
     db.refresh(job)
     url = _imagen_generate_uri(source, style, aspect)
-    print("Generated image URL:", url)
     job.status = "succeeded"
     job.result = {"asset_url": url}
     db.add(job)
