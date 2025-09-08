@@ -13,6 +13,7 @@ class Book(Base):
     title = Column(String(255), nullable=False)
     author = Column(String(255), nullable=False)
     era = Column(String(64), nullable=True)
+    summary = Column(Text, nullable=True)
     length_chars = Column(Integer, nullable=True)
     tags = Column(ARRAY(String), nullable=True)
     aozora_source_url = Column(String(1024), nullable=True)

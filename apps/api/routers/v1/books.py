@@ -41,6 +41,7 @@ def list_books(
                 "title": b.title,
                 "author": b.author,
                 "era": b.era,
+                "summary": b.summary,
                 "tags": b.tags,
                 "length_chars": b.length_chars,
             }
@@ -63,6 +64,7 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
         "title": b.title,
         "author": b.author,
         "era": b.era,
+        "summary": b.summary,
         "tags": b.tags,
         "length_chars": b.length_chars,
         "citation": b.citation,

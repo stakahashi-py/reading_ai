@@ -21,17 +21,38 @@ import re
 import sys
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+from pydantic import BaseModel
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:  # 実行環境に dotenv が無くても動作させる
+
+    def load_dotenv():
+        return None
+
+
 from bs4 import BeautifulSoup  # type: ignore
-from google import genai  # type: ignore
+
+try:
+    from google import genai  # type: ignore
+except Exception:
+    genai = None  # type: ignore
 import sqlalchemy
 from google.cloud.sql.connector import Connector, IPTypes
 
 
 # Tunables
-MAX_CHARS = 1200  # paragraph chunk upper bound
+MAX_CHARS = 5000  # paragraph chunk upper bound
 RUBY_MODE = "base"  # 'base' or 'annotate'
+
+
+# 構造化出力用のPydanticモデル
+class Metadata(BaseModel):
+    title: str
+    author: str
+    era: str
+    tags: list[str]
+    summary: str
 
 
 def load_env() -> Dict[str, Optional[str]]:
@@ -129,21 +150,47 @@ def make_slug(title: str, author: Optional[str], fallback: Optional[str] = None)
 
 
 def gemini_client(env: Dict[str, Optional[str]]):
+    if genai is None or not env.get("PROJECT_ID"):
+        return None
     return genai.Client(
         vertexai=True, project=env["PROJECT_ID"], location=env["VERTEX_LOCATION"]
     )
 
 
-def generate_meta_from_title(title: str, author: str, client) -> Dict[str, Any]:
-    """Generate metadata from title only. citation is fixed to 青空文庫."""
+def generate_meta(
+    title: str, author: str, sample_text: Optional[str], client
+) -> Dict[str, Any]:
+    """Generate metadata including summary. citation is fixed to 青空文庫."""
     system = (
         "あなたは図書の書誌メタデータ整備を行う司書です。与えられた『作品タイトル』と『著者名』から、"
-        "可能な範囲で JSON だけを返してください。フィールド: title(入力そのまま), author(著者名: 不明なら空), "
-        "era(明治/大正/昭和/平成/不明), tags(小説/短編/随筆/詩/童話、明るい,暗い,友情,恋愛,苦悩, など。)。"
-        "本文は提供しないため、確信が持てない場合は空文字や空配列で返してください。"
+        "JSONだけを返してください。フィールド: title(入力そのまま), author(著者名: 不明なら空), "
+        "era(明治/大正/昭和/平成/不明), tags(小説/短編/随筆/詩/童話、明るい,暗い,友情,恋愛,苦悩, など。), summary(作品の概要。例・芥川龍之介「あばばばば」: 主人公はまだ言葉を覚え始めたばかりの赤ん坊で、「あばばばば」と意味のない発声を繰り返すが、その内心では哲学的・観念的なことを考えているという、ユーモラスで風刺的な短編小説。芥川の数ある短編の中でも、「ナンセンス文学」や「戯作的な掌編」として知られる)。"
+        "解答の際はWeb検索を行い、情報を補完してください。"
     )
-    prompt = f"{system}\n\nタイトル: {title}\n著者名: {author}\n\nJSONのみで返答してください。"
-    resp = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt])
+    sample = (sample_text or "").strip()
+    if len(sample) > 1500:
+        sample = sample[:1500]
+    prompt = f"{system}\n\nタイトル: {title}\n著者名: {author}\n本文抜粋:\n{sample}\n\nJSONのみで返答してください。"
+    if client is None:
+        return {
+            "title": title,
+            "author": author or "",
+            "era": "",
+            "tags": [],
+            "summary": "",
+            "citation": "青空文庫",
+        }
+    # Web検索
+    grounding_tool = genai.types.Tool(google_search=genai.types.GoogleSearch())
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[prompt],
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": Metadata,
+            "tools": [grounding_tool],
+        },
+    )
     out = (resp.text or "").strip()
     if out.startswith("```"):
         out = out.strip("`\n ")
@@ -155,6 +202,8 @@ def generate_meta_from_title(title: str, author: str, client) -> Dict[str, Any]:
     if not isinstance(data.get("tags"), list):
         data["tags"] = [str(data.get("tags", ""))] if data.get("tags") else []
     data["title"] = data.get("title") or title
+    if not isinstance(data.get("summary"), str):
+        data["summary"] = ""
     data["citation"] = "青空文庫"
     return data
 
@@ -193,17 +242,18 @@ def html_to_text(html: str) -> Tuple[str, Optional[str], Optional[str]]:
     ]:
         for el in node.select(sel) if hasattr(node, "select") else []:
             el.decompose()
-    # ruby
+    # ruby: ルビは基底のみ残し、rt/rpを削除（括弧も削除）
     for rb in node.find_all("ruby") if hasattr(node, "find_all") else []:
-        base = "".join(x.get_text() for x in rb.find_all("rb")) or rb.get_text()
-        rt = "".join(x.get_text() for x in rb.find_all("rt"))
-        repl = base if RUBY_MODE == "base" or not rt else f"{base}({rt})"
-        rb.replace_with(repl)
+        for t in rb.find_all(["rt", "rp"]):
+            t.decompose()
+        base = rb.get_text()
+        rb.replace_with(base)
     for br in node.find_all("br") if hasattr(node, "find_all") else []:
         br.replace_with("\n")
     for p in node.find_all("p") if hasattr(node, "find_all") else []:
         p.insert_before("\n\n")
-    text = node.get_text("\n") if hasattr(node, "get_text") else str(node)
+    # インライン境界の改行を防ぐため separator なし
+    text = node.get_text() if hasattr(node, "get_text") else str(node)
     return post_cleanup(text), title, author
 
 
@@ -220,6 +270,7 @@ def html_to_text_regex(html: str) -> Tuple[str, Optional[str], Optional[str]]:
     body = re.sub(r"<rt.*?>.*?</rt>", "", body, flags=re.S | re.I)
     body = re.sub(r"</?ruby.*?>", "", body, flags=re.S | re.I)
     body = re.sub(r"</?rb.*?>", "", body, flags=re.S | re.I)
+    body = re.sub(r"<rp.*?>.*?</rp>", "", body, flags=re.S | re.I)
     body = re.sub(r"<\s*br\s*/?\s*>", "\n", body, flags=re.I)
     body = re.sub(r"<\s*/p\s*>", "\n\n", body, flags=re.I)
     body = re.sub(r"<\s*p\s*[^>]*>", "", body, flags=re.I)
@@ -237,10 +288,158 @@ def post_cleanup(text: str) -> str:
     return text.strip()
 
 
-def chunk_text(text: str, max_chars: int = MAX_CHARS) -> List[str]:
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    if not paras:
-        paras = [text]
+def _ascend_to_main_child(main, el):
+    """main 直下の子要素になるまで祖先を遡る。"""
+    cur = el
+    from bs4.element import Tag
+
+    while isinstance(cur, Tag) and cur.parent is not None and cur.parent is not main:
+        cur = cur.parent
+    return cur
+
+
+def html_to_paragraphs_with_poem(
+    html: str,
+) -> Tuple[List[str], Optional[str], Optional[str]]:
+    """HTML→段落配列。ルビは基底のみ。詩ブロックは見出しごとに1段落。
+    詩判定: ブロック内の非空行のうち、句読点を含まない行が閾値以上（0.6）
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    title = None
+    if soup.title and soup.title.text:
+        title = re.sub(r"\s*[（\(].*?青空文庫.*?[）\)]\s*", "", soup.title.text.strip())
+    author = None
+
+    # main node candidates
+    node = None
+    for name, attrs in [
+        ("div", {"id": "main_text"}),
+        ("div", {"class": "main_text"}),
+        ("div", {"id": "text"}),
+        ("article", {}),
+        ("div", {"id": "contents"}),
+    ]:
+        node = soup.find(name, attrs=attrs)
+        if node:
+            break
+    if not node:
+        node = soup.body or soup
+
+    # remove footers
+    for sel in [
+        "div.bibliographical_information",
+        "div#bibliographical_information",
+        "div.footnote",
+        "footer",
+        "div#footer",
+    ]:
+        for el in node.select(sel) if hasattr(node, "select") else []:
+            el.decompose()
+
+    # gaiji alt を残す
+    for img in node.find_all("img") if hasattr(node, "find_all") else []:
+        cls = img.get("class") or []
+        if "gaiji" in cls:
+            alt = img.get("alt") or ""
+            img.replace_with(alt)
+
+    # ruby: rt/rp 除去、基底のみ
+    for rb in node.find_all("ruby") if hasattr(node, "find_all") else []:
+        for t in rb.find_all(["rt", "rp"]):
+            t.decompose()
+        rb.replace_with(rb.get_text())
+
+    # <br>→\n, <p>の前に空行
+    for br in node.find_all("br") if hasattr(node, "find_all") else []:
+        br.replace_with("\n")
+    for p in node.find_all("p") if hasattr(node, "find_all") else []:
+        p.insert_before("\n\n")
+
+    # 見出しコンテナを抽出（h1-6 を含む main 直下の子）
+    headings = (
+        node.find_all([f"h{i}" for i in range(1, 7)])
+        if hasattr(node, "find_all")
+        else []
+    )
+    containers = []
+    if headings:
+        for hx in headings:
+            containers.append(_ascend_to_main_child(node, hx))
+        # main 直下の順序で一意化
+        seen = set()
+        ordered_children = list(node.children)
+        unique_containers = []
+        for ch in ordered_children:
+            if ch in containers and id(ch) not in seen:
+                unique_containers.append(ch)
+                seen.add(id(ch))
+        containers = unique_containers
+
+    parts: List[str] = []
+
+    def collect_text(elements) -> str:
+        from bs4.element import NavigableString, Tag
+
+        buf: List[str] = []
+        for el in elements:
+            if isinstance(el, NavigableString):
+                buf.append(str(el))
+            elif hasattr(el, "get_text"):
+                buf.append(el.get_text())
+        return post_cleanup("".join(buf))
+
+    children = list(node.children)
+    if not containers:
+        # 見出しが無い場合は従来処理相当
+        text = collect_text(children)
+        paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        return paras, title, author
+
+    # プレリュード（最初の見出しまで）
+    first_idx = children.index(containers[0])
+    prelude = collect_text(children[:first_idx])
+    if prelude:
+        parts.extend([p.strip() for p in re.split(r"\n\s*\n", prelude) if p.strip()])
+
+    # 各見出しブロック
+    def is_poem_block(s: str) -> bool:
+        lines = [ln.strip() for ln in s.split("\n") if ln.strip()]
+        if len(lines) < 3:
+            return False
+        no_punct = sum(
+            1 for ln in lines if not re.search(r"[。．！？?!、，；;：:]", ln)
+        )
+        return (no_punct / max(1, len(lines))) >= 0.6
+
+    for idx, cont in enumerate(containers):
+        start = children.index(cont) + 1
+        end = (
+            children.index(containers[idx + 1])
+            if idx + 1 < len(containers)
+            else len(children)
+        )
+        block_elems = children[start:end]
+        block_text = collect_text(block_elems)
+        # 見出しそのもの（タイトル）は別段落として保持
+        # タイトル抽出
+        hx = cont.find([f"h{i}" for i in range(1, 7)])
+        if hx and hx.get_text(strip=True):
+            parts.append(hx.get_text(strip=True))
+        if not block_text.strip():
+            continue
+        if is_poem_block(block_text):
+            # 詩はブロック全体を1段落（内部の空行は1改行に縮約）
+            para = re.sub(r"\n{2,}", "\n", block_text).strip()
+            parts.append(para)
+        else:
+            parts.extend(
+                [p.strip() for p in re.split(r"\n\s*\n", block_text) if p.strip()]
+            )
+
+    return parts, title, author
+
+
+def chunk_paragraphs(paras: List[str], max_chars: int = MAX_CHARS) -> List[str]:
     out: List[str] = []
     for p in paras:
         if len(p) <= max_chars:
@@ -250,11 +449,35 @@ def chunk_text(text: str, max_chars: int = MAX_CHARS) -> List[str]:
         n = len(p)
         while start < n:
             end = min(start + max_chars, n)
-            # try to cut at last '。' within the window
             window = p[start:end]
-            cut = window.rfind(JA_SENT_END)
-            if cut != -1 and (start + cut + 1 - start) >= max_chars * 0.6:
+            # 直前の改行 or 句読点で切る
+            candidates = []
+            for ch in (
+                "\n",
+                "。",
+                "．",
+                "！",
+                "!",
+                "？",
+                "?",
+                "、",
+                "，",
+                ",",
+                "；",
+                ";",
+                "：",
+                ":",
+            ):
+                pos = window.rfind(ch)
+                if pos != -1:
+                    candidates.append(pos)
+            if candidates:
+                cut = max(candidates)
                 end = start + cut + 1
+            else:
+                m = re.search(r"[ \t\u3000]+(?!.*[ \t\u3000])", window)
+                if m:
+                    end = start + m.end()
             chunk = p[start:end].strip()
             if chunk:
                 out.append(chunk)
@@ -266,8 +489,8 @@ def extract_and_chunk(
     html_path: Path,
 ) -> Tuple[List[str], Optional[str], Optional[str]]:
     html = html_path.read_text(encoding="utf-8", errors="ignore")
-    text, title_in_doc, author_in_doc = html_to_text(html)
-    chunks = chunk_text(text, MAX_CHARS)
+    paras, title_in_doc, author_in_doc = html_to_paragraphs_with_poem(html)
+    chunks = chunk_paragraphs(paras, MAX_CHARS)
     return chunks, title_in_doc, author_in_doc
 
 
@@ -282,25 +505,37 @@ def upsert_book_and_paragraphs(
     era = meta.get("era") or None
     tags = meta.get("tags") or None
     citation = meta.get("citation") or "青空文庫"
+    summary = meta.get("summary") or None
     slug = make_slug(title, author)
     length_chars = sum(len(p) for p in paragraphs) + max(0, 2 * (len(paragraphs) - 1))
 
     with engine.begin() as conn:
         res = conn.exec_driver_sql(
             """
-            INSERT INTO books (slug, title, author, era, length_chars, tags, aozora_source_url, citation)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO books (slug, title, author, era, summary, length_chars, tags, aozora_source_url, citation)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (slug) DO UPDATE SET
               title=EXCLUDED.title,
               author=EXCLUDED.author,
               era=EXCLUDED.era,
+              summary=EXCLUDED.summary,
               length_chars=EXCLUDED.length_chars,
               tags=EXCLUDED.tags,
               aozora_source_url=EXCLUDED.aozora_source_url,
               citation=EXCLUDED.citation
             RETURNING id
             """,
-            (slug, title, author, era, length_chars, tags, aozora_url, citation),
+            (
+                slug,
+                title,
+                author,
+                era,
+                summary,
+                length_chars,
+                tags,
+                aozora_url,
+                citation,
+            ),
         )
         book_id = res.scalar_one()
 
@@ -333,8 +568,12 @@ def main():
     ok = 0
     for i, path in enumerate(files, 1):
         base_title, author_from_name = derive_title_author_from_filename(path)
-        meta = generate_meta_from_title(base_title, author_from_name, client)
+        # 先に本文抽出（詩ブロック化・段落）→ 冒頭抜粋をメタ生成へ
         paras, title_in_doc, _author_in_doc = extract_and_chunk(path)
+        sample = "\n\n".join(paras[:3])
+        meta = generate_meta(
+            title_in_doc or base_title, author_from_name or "", sample, client
+        )
         if not meta.get("title"):
             meta["title"] = title_in_doc or base_title
         # Author is definitive from filename format: override any model output
