@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
 from pydantic import BaseModel
@@ -182,28 +183,25 @@ def generate_meta(
         }
     # Web検索
     grounding_tool = genai.types.Tool(google_search=genai.types.GoogleSearch())
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[prompt],
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": Metadata,
-            "tools": [grounding_tool],
-        },
-    )
-    out = (resp.text or "").strip()
-    if out.startswith("```"):
-        out = out.strip("`\n ")
-        if out.lower().startswith("json"):
-            out = out[4:].lstrip("\n")
-    import json
-
-    data = json.loads(out)
-    if not isinstance(data.get("tags"), list):
-        data["tags"] = [str(data.get("tags", ""))] if data.get("tags") else []
-    data["title"] = data.get("title") or title
-    if not isinstance(data.get("summary"), str):
-        data["summary"] = ""
+    retry_num = 5
+    while retry_num > 0:
+        try:
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[prompt],
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": Metadata,
+                    "tools": [grounding_tool],
+                },
+            )
+            out = resp.text
+            data = json.loads(out)
+            break
+        except Exception as e:
+            print(f"{title}でエラー、{6 - retry_num}回目", file=sys.stderr)
+            retry_num -= 1
+            continue
     data["citation"] = "青空文庫"
     return data
 
@@ -555,36 +553,168 @@ def upsert_book_and_paragraphs(
         return book_id
 
 
+def to_json_array(tags: Optional[List[str]]) -> str:
+    import json
+
+    return json.dumps(tags or [], ensure_ascii=False)
+
+
+def write_csv(
+    out_dir: Path, books_rows: List[Dict[str, Any]], paras_rows: List[Dict[str, Any]]
+):
+    import csv
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    books_path = out_dir / "books.csv"
+    paras_path = out_dir / "paragraphs.csv"
+
+    with books_path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "slug",
+                "title",
+                "author",
+                "era",
+                "summary",
+                "length_chars",
+                "tags_json",
+                "aozora_source_url",
+                "citation",
+            ]
+        )
+        for r in books_rows:
+            w.writerow(
+                [
+                    r.get("slug"),
+                    r.get("title"),
+                    r.get("author"),
+                    r.get("era"),
+                    r.get("summary"),
+                    r.get("length_chars"),
+                    to_json_array(r.get("tags")),
+                    r.get("aozora_source_url"),
+                    r.get("citation"),
+                ]
+            )
+
+    with paras_path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["slug", "idx", "text", "char_start", "char_end"])
+        for r in paras_rows:
+            w.writerow(
+                [
+                    r.get("slug"),
+                    r.get("idx"),
+                    r.get("text"),
+                    r.get("char_start"),
+                    r.get("char_end"),
+                ]
+            )
+
+
 def main():
-    env = load_env()
-    client = gemini_client(env)
-    engine = create_engine(env)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Extract Aozora XHTML and write CSV for COPY"
+    )
+    parser.add_argument(
+        "paths", nargs="*", help="HTML file paths or glob patterns under aozora_html/"
+    )
+    parser.add_argument("--limit", type=int, default=0, help="Process at most N files")
+    parser.add_argument(
+        "--max-chars", type=int, default=MAX_CHARS, help="Chunk upper bound"
+    )
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Disable LLM metadata generation even if available",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default="preprocessing/out_csv",
+        help="Directory to write books.csv and paragraphs.csv",
+    )
+    args = parser.parse_args()
+
     html_dir = Path("aozora_html")
-    files = sorted(html_dir.glob("*.html"))
+    files: List[Path] = []
+    if args.paths:
+        for p in args.paths:
+            pth = Path(p)
+            if pth.is_file():
+                files.append(pth)
+            else:
+                files.extend(sorted(html_dir.glob(p)))
+    else:
+        files = sorted(html_dir.glob("*.html"))
+    if args.limit and len(files) > args.limit:
+        files = files[: args.limit]
     if not files:
-        print("No HTML files found in aozora_html")
+        print("No HTML files found (aozora_html)")
         return
-    print(f"Found {len(files)} HTML files. Starting ingest…")
-    ok = 0
+
+    env = load_env()
+    client = None if args.no_llm else gemini_client(env)
+
+    books_rows: List[Dict[str, Any]] = []
+    paras_rows: List[Dict[str, Any]] = []
+
     for i, path in enumerate(files, 1):
         base_title, author_from_name = derive_title_author_from_filename(path)
-        # 先に本文抽出（詩ブロック化・段落）→ 冒頭抜粋をメタ生成へ
-        paras, title_in_doc, _author_in_doc = extract_and_chunk(path)
-        sample = "\n\n".join(paras[:3])
+        chunks, title_in_doc, _author_in_doc = extract_and_chunk(path)
+        sample = "\n\n".join(chunks[:3])
         meta = generate_meta(
             title_in_doc or base_title, author_from_name or "", sample, client
         )
-        if not meta.get("title"):
-            meta["title"] = title_in_doc or base_title
-        # Author is definitive from filename format: override any model output
+        # タイトルは常にファイル名起点（著者混入を防ぐ）
+        meta["title"] = base_title
         meta["author"] = author_from_name or meta.get("author") or ""
-        book_id = upsert_book_and_paragraphs(engine, meta, paras)
-        print(
-            f"[{i}/{len(files)}] OK {path.name} -> book_id={book_id}, paras={len(paras)}, title={meta.get('title')}, "
+
+        title = meta.get("title") or base_title
+        author = meta.get("author") or ""
+        era = meta.get("era") or None
+        summary = meta.get("summary") or None
+        tags = meta.get("tags") or []
+        citation = meta.get("citation") or "青空文庫"
+        slug = make_slug(title, author)
+        length_chars = sum(len(p) for p in chunks) + max(0, 2 * (len(chunks) - 1))
+
+        books_rows.append(
+            {
+                "slug": slug,
+                "title": title,
+                "author": author,
+                "era": era,
+                "summary": summary,
+                "length_chars": length_chars,
+                "tags": tags,
+                "aozora_source_url": None,
+                "citation": citation,
+            }
         )
-        ok += 1
-    get_connector().close()
-    print(f"Done. processed={ok}/{len(files)}")
+
+        offset = 0
+        for idx, text in enumerate(chunks):
+            start = offset
+            end = start + len(text)
+            paras_rows.append(
+                {
+                    "slug": slug,
+                    "idx": idx,
+                    "text": text,
+                    "char_start": start,
+                    "char_end": end,
+                }
+            )
+            offset = end + 2
+
+        print(f"[{i}/{len(files)}] {path.name} -> slug={slug}, paras={len(chunks)}")
+
+    out_dir = Path(args.out_dir)
+    write_csv(out_dir, books_rows, paras_rows)
+    print(f"CSV written: {out_dir}/books.csv and {out_dir}/paragraphs.csv")
 
 
 if __name__ == "__main__":
