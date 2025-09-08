@@ -132,6 +132,7 @@ def _veo_generate_and_wait(
             "resolution": "720p",
             "personGeneration": "allow_all",
             "sampleCount": 1,
+            "generateAudio": False,
             "storageUri": f"gs://{ASSETS_BUCKET.rstrip('/')}/veo",
         },
     }
