@@ -210,6 +210,24 @@ AOZORA_NOTE = re.compile(r"［＃.*?］")
 JA_SENT_END = "。"
 
 
+def _extract_biblio_text(soup) -> Optional[str]:
+    """div.bibliographical_information/#bibliographical_information をテキスト抽出→整形して返す。"""
+    try:
+        el = None
+        if hasattr(soup, "find"):
+            el = soup.find("div", class_="bibliographical_information") or soup.find(
+                id="bibliographical_information"
+            )
+        if el and hasattr(el, "get_text"):
+            txt = el.get_text("\n")
+            txt = AOZORA_NOTE.sub("", txt)
+            txt = re.sub(r"\n{3,}", "\n\n", txt).strip()
+            return txt if txt else None
+    except Exception:
+        pass
+    return None
+
+
 def html_to_text(html: str) -> Tuple[str, Optional[str], Optional[str]]:
     soup = BeautifulSoup(html, "html.parser")
     title = None
@@ -230,14 +248,23 @@ def html_to_text(html: str) -> Tuple[str, Optional[str], Optional[str]]:
             break
     if not node:
         node = soup.body or soup
-    # remove footers
-    for sel in [
-        "div.bibliographical_information",
-        "div#bibliographical_information",
-        "div.footnote",
-        "footer",
-        "div#footer",
+    # 書誌ブロック抽出→本文から除去
+    biblio_text = _extract_biblio_text(soup)
+    for el in [
+        (
+            node.find("div", class_="bibliographical_information")
+            if hasattr(node, "find")
+            else None
+        ),
+        node.find(id="bibliographical_information") if hasattr(node, "find") else None,
     ]:
+        if el:
+            try:
+                el.decompose()
+            except Exception:
+                pass
+    # remove footers（書誌以外）
+    for sel in ["div.footnote", "footer", "div#footer"]:
         for el in node.select(sel) if hasattr(node, "select") else []:
             el.decompose()
     # ruby: ルビは基底のみ残し、rt/rpを削除（括弧も削除）
@@ -252,7 +279,10 @@ def html_to_text(html: str) -> Tuple[str, Optional[str], Optional[str]]:
         p.insert_before("\n\n")
     # インライン境界の改行を防ぐため separator なし
     text = node.get_text() if hasattr(node, "get_text") else str(node)
-    return post_cleanup(text), title, author
+    text = post_cleanup(text)
+    if biblio_text:
+        text = text + "\n\n" + biblio_text
+    return text, title, author
 
 
 def html_to_text_regex(html: str) -> Tuple[str, Optional[str], Optional[str]]:
@@ -281,7 +311,7 @@ def post_cleanup(text: str) -> str:
     text = AOZORA_NOTE.sub("", text)
     text = re.sub(r"[ \t\u3000]+\n", "\n", text)
     text = re.sub(r"[ \t]+$", "", text, flags=re.M)
-    text = re.split(r"\n底本[：:]", text)[0]
+    # ここでは『底本：』以降は切り落とさない（後段で書誌ブロックとして付与するため）
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -323,10 +353,23 @@ def html_to_paragraphs_with_poem(
     if not node:
         node = soup.body or soup
 
-    # remove footers
+    # 書誌ブロック抽出→本文からは除去（最後に1段落で付与）
+    biblio_text = _extract_biblio_text(soup)
+    for el in [
+        (
+            node.find("div", class_="bibliographical_information")
+            if hasattr(node, "find")
+            else None
+        ),
+        node.find(id="bibliographical_information") if hasattr(node, "find") else None,
+    ]:
+        if el:
+            try:
+                el.decompose()
+            except Exception:
+                pass
+    # remove footers（書誌以外）
     for sel in [
-        "div.bibliographical_information",
-        "div#bibliographical_information",
         "div.footnote",
         "footer",
         "div#footer",
@@ -434,6 +477,9 @@ def html_to_paragraphs_with_poem(
                 [p.strip() for p in re.split(r"\n\s*\n", block_text) if p.strip()]
             )
 
+    # 書誌ブロックがあれば末尾に追加
+    if biblio_text:
+        parts.append(biblio_text)
     return parts, title, author
 
 
@@ -678,7 +724,7 @@ def main():
         summary = meta.get("summary") or None
         tags = meta.get("tags") or []
         citation = meta.get("citation") or "青空文庫"
-        slug = make_slug(title, author)
+        slug = make_slug(base_title, author_from_name)
         length_chars = sum(len(p) for p in chunks) + max(0, 2 * (len(chunks) - 1))
 
         books_rows.append(
