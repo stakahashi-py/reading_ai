@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Optional, Any
+from typing import Optional, Any, Iterable
 
 
 LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
@@ -54,3 +54,33 @@ def answer_question(book_title: str, question: str) -> tuple[str, int]:
     text = (resp.text or "").strip()
     latency_ms = int((time.time() - start) * 1000)
     return text, latency_ms
+
+
+def stream_answer_question(book_title: str, question: str) -> Iterable[str]:
+    """Yield answer chunks. Falls back to chunking the final answer if streaming is unavailable."""
+    try:
+        client = get_client()
+        prompt = (
+            "あなたは文学解説者です。以下の作品についての質問に、平易な日本語で簡潔に答えてください。\n"
+            "- 推測はその旨を明示し、重大なネタバレは避けてください（必要なときは注意書き）。\n"
+            f"作品名: {book_title}\n"
+            f"質問: {question}\n"
+            "--- 出力 ---\n"
+            "回答のみ。"
+        )
+        # google genai streaming API（利用可なら）
+        stream = client.models.generate_content(model=LLM_MODEL, contents=[prompt], stream=True)
+        for chunk in stream:
+            try:
+                if getattr(chunk, "text", None):
+                    yield chunk.text
+            except Exception:
+                continue
+        return
+    except Exception:
+        pass
+    # Fallback: non-streaming → 擬似チャンク
+    text, _ = answer_question(book_title, question)
+    step = 60
+    for i in range(0, len(text), step):
+        yield text[i : i + step]

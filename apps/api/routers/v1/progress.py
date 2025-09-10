@@ -12,6 +12,7 @@ router = APIRouter()
 def save_progress(payload: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
     book_id = payload.get("book_id")
     scroll_percent = payload.get("scroll_percent")
+    last_para_idx = payload.get("last_paragraph_index")
     if book_id is None or scroll_percent is None:
         raise HTTPException(status_code=400, detail="book_id and scroll_percent are required")
     rp = (
@@ -21,8 +22,10 @@ def save_progress(payload: dict, db: Session = Depends(get_db), user=Depends(get
     )
     if rp:
         rp.scroll_percent = scroll_percent
+        if last_para_idx is not None:
+            rp.last_para_idx = int(last_para_idx)
     else:
-        rp = ReadingProgress(user_id=user["uid"], book_id=book_id, scroll_percent=scroll_percent)
+        rp = ReadingProgress(user_id=user["uid"], book_id=book_id, scroll_percent=scroll_percent, last_para_idx=last_para_idx)
         db.add(rp)
     db.commit()
     return {"ok": True}
@@ -62,4 +65,26 @@ def get_progress(book_id: int, db: Session = Depends(get_db), user=Depends(get_c
         "scroll_percent": float(rp.scroll_percent),
         "completed_at": rp.completed_at.isoformat() if rp.completed_at else None,
         "updated_at": rp.updated_at.isoformat() if rp.updated_at else None,
+        "last_paragraph_index": rp.last_para_idx,
     }
+
+
+@router.post("/progress/list")
+def list_progress(payload: dict, db: Session = Depends(get_db), user=Depends(get_current_user)):
+    """指定book_id群の進捗を一括取得。未指定なら全件を返す。"""
+    book_ids = payload.get("book_ids") or []
+    q = db.query(ReadingProgress).filter(ReadingProgress.user_id == user["uid"])
+    if book_ids:
+        q = q.filter(ReadingProgress.book_id.in_(book_ids))
+    rows = q.all()
+    items = [
+        {
+            "book_id": r.book_id,
+            "scroll_percent": float(r.scroll_percent),
+            "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            "last_paragraph_index": r.last_para_idx,
+        }
+        for r in rows
+    ]
+    return {"items": items}

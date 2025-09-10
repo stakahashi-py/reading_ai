@@ -99,6 +99,16 @@ CREATE TABLE IF NOT EXISTS reading_progress (
   PRIMARY KEY (user_id, book_id)
 );
 
+-- add last_para_idx column for robust position restore
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name='reading_progress' AND column_name='last_para_idx'
+  ) THEN
+    EXECUTE 'ALTER TABLE reading_progress ADD COLUMN last_para_idx INTEGER';
+  END IF;
+END $$ LANGUAGE plpgsql;
+
 CREATE TABLE IF NOT EXISTS feedback (
   id         SERIAL PRIMARY KEY,
   user_id    VARCHAR(128) NOT NULL,
@@ -151,3 +161,44 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   updated_at   TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_status ON generation_jobs (status, created_at);
+
+-- Translations (per-user, per-paragraph modern translation)
+CREATE TABLE IF NOT EXISTS translations (
+  id         SERIAL PRIMARY KEY,
+  user_id    VARCHAR(128) NOT NULL,
+  book_id    INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  para_id    INTEGER NOT NULL REFERENCES paragraphs(id) ON DELETE CASCADE,
+  text       TEXT NOT NULL,
+  model      VARCHAR(128),
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_translations_user_book ON translations (user_id, book_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_translations_user_para ON translations (user_id, para_id);
+
+-- updated_at auto-update triggers (reading_progress, generation_jobs)
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_reading_progress_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_reading_progress_updated_at
+    BEFORE UPDATE ON reading_progress
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'trg_generation_jobs_updated_at'
+  ) THEN
+    CREATE TRIGGER trg_generation_jobs_updated_at
+    BEFORE UPDATE ON generation_jobs
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+  END IF;
+END $$;

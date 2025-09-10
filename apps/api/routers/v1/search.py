@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Dict, Any, List, Optional, Tuple
@@ -170,3 +171,25 @@ def llm_search(payload: dict, db: Session = Depends(get_db)):
         # trim snippet to ~120 chars
         it["snippet"] = (snip[:120] + ("…" if len(snip) > 120 else "")) if snip else ""
     return {"items": items, "method_weights": method_weights, "query": q, "offset": offset, "limit": limit, "total": total}
+
+
+@router.post("/llm/stream")
+def llm_search_stream(payload: dict, db: Session = Depends(get_db)):
+    """ストリーミングで検索候補を逐次返す（SSE）。"""
+    result = llm_search(payload, db)
+    items = result.get("items", [])
+
+    def gen():
+        yield "event: start\n\n"
+        if not items:
+            yield "data: 関連する作品が見つかりませんでした。\n\n"
+        else:
+            # 1行ずつ配信（タイトル/著者/時代 + リンク）
+            for it in items:
+                title = it.get("title") or "Untitled"
+                subtitle = " / ".join([v for v in [it.get("author"), it.get("era")] if v])
+                line = f"・<a href=\\\"/web/read.html?book_id={it.get('id')}\\\">{title}</a>（{subtitle}）"
+                yield f"data: {line}\n\n"
+        yield "event: end\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")

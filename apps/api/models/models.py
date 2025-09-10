@@ -38,6 +38,17 @@ class Paragraph(Base):
     book = relationship("Book", back_populates="paragraphs")
 
 
+class Translation(Base):
+    __tablename__ = "translations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String(128), nullable=False)
+    book_id = Column(Integer, ForeignKey("books.id", ondelete="CASCADE"), nullable=False)
+    para_id = Column(Integer, ForeignKey("paragraphs.id", ondelete="CASCADE"), nullable=False)
+    text = Column(Text, nullable=False)
+    model = Column(String(128), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Highlight(Base):
     __tablename__ = "highlights"
     id = Column(Integer, primary_key=True)
@@ -78,6 +89,7 @@ class ReadingProgress(Base):
     scroll_percent = Column(Numeric(5, 2), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     completed_at = Column(DateTime, nullable=True)
+    last_para_idx = Column(Integer, nullable=True)
 
 
 class Feedback(Base):

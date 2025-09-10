@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
 from ...security.auth import get_current_user
@@ -32,3 +33,42 @@ def add_highlight(payload: dict, db: Session = Depends(get_db), user=Depends(get
     db.commit()
     db.refresh(h)
     return {"id": h.id}
+
+
+@router.get("/highlights")
+def list_highlights(
+    book_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    q = db.query(Highlight).filter(Highlight.user_id == user["uid"])
+    if book_id is not None:
+        q = q.filter(Highlight.book_id == book_id)
+    q = q.order_by(Highlight.created_at.asc())
+    rows: List[Highlight] = q.all()
+    items: List[Dict[str, Any]] = []
+    for h in rows:
+        items.append(
+            {
+                "id": h.id,
+                "book_id": h.book_id,
+                "para_id": h.para_id,
+                "span_start": h.span_start,
+                "span_end": h.span_end,
+                "text_snippet": h.text_snippet,
+                "created_at": h.created_at.isoformat(),
+            }
+        )
+    return {"items": items}
+
+
+@router.delete("/highlights/{highlight_id}")
+def delete_highlight(
+    highlight_id: int, db: Session = Depends(get_db), user=Depends(get_current_user)
+):
+    h = db.get(Highlight, highlight_id)
+    if not h or h.user_id != user["uid"]:
+        raise HTTPException(status_code=404, detail="highlight not found")
+    db.delete(h)
+    db.commit()
+    return {"ok": True}

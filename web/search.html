@@ -4,33 +4,34 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>検索</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { accent: '#93c5fd' } // パステルブルー
+        }
+      }
+    }
+  </script>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
-    header { padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }
-    .container { padding: 16px; max-width: 960px; margin: 0 auto; }
-    .row { display:flex; gap:8px; flex-wrap: wrap; }
-    input, select, button { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; }
-    button { background:#111; color:#fff; cursor:pointer; }
-    .result { padding: 12px; border: 1px solid #eee; border-radius: 8px; margin-top: 12px; }
-    .muted { color: #666; font-size: 12px; }
-    a.btn { display: inline-block; padding: 6px 10px; background: #111; color: #fff; border-radius: 6px; text-decoration: none; font-size: 14px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   </style>
   <script>
     function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
     function setQS(params){ const p=new URLSearchParams(params); history.replaceState(null,'',`?${p.toString()}`); }
 
     let sOffset = 0; const sLimit = 10; let lastBody = null; let loading=false; let total=0;
+    const bookProgress = new Map();
 
     async function search(){
       const q = document.getElementById('q').value.trim();
       const author = document.getElementById('author').value.trim();
       const era = document.getElementById('era').value;
-      const genre = document.getElementById('genre').value;
-      setQS({q, author, era, genre});
+      setQS({q, author, era});
       const body = { query: q };
       if (author) body.author = author;
       if (era) body.era = era;
-      if (genre) body.genre = genre;
       document.getElementById('results').innerHTML = '検索中…';
       sOffset = 0; lastBody = body; await loadMore();
     }
@@ -52,88 +53,222 @@
       if (sOffset < total){
         const btn = document.createElement('button');
         btn.textContent = 'もっと見る';
+        btn.className = 'px-4 py-2 rounded border border-gray-300';
         btn.onclick = loadMore;
         box.appendChild(btn);
       }
     }
 
-    function renderResults(items, reset){
+    function statusFromProgress(p){
+      if (!p) return {label:'未読', sort:2, percent:0};
+      if (p.completed_at) return {label:'読了', sort:1, percent:100};
+      const pct = typeof p.scroll_percent === 'number' ? p.scroll_percent : parseFloat(p.scroll_percent)||0;
+      if (pct >= 1) return {label:'読書中', sort:0, percent:pct};
+      return {label:'未読', sort:2, percent:0};
+    }
+
+    async function fetchProgressFor(items){
+      const ids = items.map(it=>it.id).filter((v,i,a)=>a.indexOf(v)===i);
+      if (!ids.length) return;
+      try{
+        const res = await fetch('/v1/progress/list', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_ids: ids})});
+        const data = await res.json();
+        for (const it of (data.items||[])) bookProgress.set(it.book_id, it);
+      }catch(e){}
+    }
+
+    async function renderResults(items, reset){
       const box = document.getElementById('results');
       if (reset) box.innerHTML='';
       if (!items.length){ box.textContent='該当なし'; return; }
+      await fetchProgressFor(items);
+      const groups = {reading:[], completed:[], unread:[]};
       for (const it of items){
         const el = document.createElement('div');
         const subtitle = [it.author, it.era].filter(Boolean).join(' / ');
-        el.className = 'result';
+        const prog = bookProgress.get(it.id);
+        const st = statusFromProgress(prog);
+        el.className = 'border border-gray-200 rounded-lg p-3 mt-3';
         el.innerHTML = `
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+          <div class="flex items-start justify-between gap-2">
             <div>
-              <div><strong>${it.title || 'Untitled'}</strong></div>
-              <div class="muted">${subtitle}</div>
-              ${it.tags && it.tags.length ? `<div class="muted">タグ: ${it.tags.join(', ')}</div>` : ''}
-              ${it.snippet ? `<div style="margin-top:6px;">${it.snippet.replaceAll('\n', ' ')}</div>` : ''}
+              <div class="font-semibold">${it.title || 'Untitled'}</div>
+              <div class="text-gray-500 text-sm">${subtitle}</div>
+              ${it.snippet ? `<div class="mt-2">${it.snippet.replaceAll('\n', ' ')}</div>` : ''}
             </div>
-            <div style="text-align:right">
-              ${typeof it.score==='number' ? `<div class="muted">score: ${it.score.toFixed(3)}</div>` : ''}
-              <div style="margin-top:6px"><a class="btn" href="/web/read.html?book_id=${it.id}">読む</a></div>
+            <div class="text-right min-w-[140px]">
+              ${typeof it.score==='number' ? `<div class="text-gray-400 text-xs">score: ${it.score.toFixed(3)}</div>` : ''}
+              <div class="mt-1 text-xs"><span class="inline-block px-2 py-0.5 rounded bg-accent/20 text-sky-700">${st.label}${st.label==='読書中' ? ` ${Math.round(st.percent)}%` : ''}</span></div>
+              <div class="mt-2 flex gap-2 justify-end">
+                ${st.label==='読了' ? `<button class=\"px-3 py-1 rounded border border-gray-300 text-sm\" onclick=\"openReviewModal(${it.id})\">感想表示</button>` : ''}
+                <a class="inline-block px-3 py-1 rounded bg-sky-500 text-white text-sm" href="/web/read.html?book_id=${it.id}">読む</a>
+              </div>
             </div>
           </div>
         `;
-        box.appendChild(el);
+        if (st.label==='読書中') groups.reading.push(el);
+        else if (st.label==='読了') groups.completed.push(el);
+        else groups.unread.push(el);
       }
+      for (const el of [...groups.reading, ...groups.completed, ...groups.unread]) box.appendChild(el);
     }
 
     function restoreFromQS(){
       const q = qs('q') || '';
       const author = qs('author') || '';
       const era = qs('era') || '';
-      const genre = qs('genre') || '';
       document.getElementById('q').value = q;
       document.getElementById('author').value = author;
       if (era) document.getElementById('era').value = era;
-      if (genre) document.getElementById('genre').value = genre;
-      if (q || author || era || genre) search();
+      if (q || author || era) search();
     }
 
     function onKey(e){ if (e.key==='Enter'){ e.preventDefault(); search(); } }
 
     async function loadFilters(){
       const selEra = document.getElementById('era');
-      const selTag = document.getElementById('genre');
       try{
         const res = await fetch('/v1/books/filters');
         const data = await res.json();
         for (const e of (data.eras || [])){
           const opt = document.createElement('option'); opt.value = e; opt.textContent = e; selEra.appendChild(opt);
         }
-        for (const t of (data.tags || [])){
-          const opt = document.createElement('option'); opt.value = t; opt.textContent = t; selTag.appendChild(opt);
-        }
       }catch(e){}
     }
 
-    window.addEventListener('DOMContentLoaded', async ()=>{ await loadFilters(); restoreFromQS(); });
+    // 初期表示：未検索なら 読書中→読了→未読 の順に並べる
+    async function loadInitialRanking(){
+      const res = await fetch('/v1/books?offset=0&limit=100');
+      const data = await res.json();
+      const items = data.items || [];
+      // 進捗を一括取得
+      await fetchProgressFor(items);
+      const withStatus = items.map(b=>({b, st: (function(p){
+        if (!p) return {key:2, t:0};
+        if (p.completed_at) return {key:1, t: new Date(p.completed_at).getTime()};
+        return {key:0, t: new Date(p.updated_at||0).getTime()};
+      })(bookProgress.get(b.id))}));
+      withStatus.sort((x,y)=> x.st.key - y.st.key || y.st.t - x.st.t);
+      await renderResults(withStatus.map(x=>x.b), true);
+    }
+
+    // 右カラム：チャット
+    function appendChat(role, html){
+      const box = document.getElementById('chat-log');
+      const wrap = document.createElement('div');
+      wrap.className = `flex ${role==='user' ? 'justify-end' : 'justify-start'} my-2`;
+      const bubble = document.createElement('div');
+      bubble.className = `max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role==='user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
+      bubble.innerHTML = html;
+      wrap.appendChild(bubble);
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // 感想モーダル
+    async function openReviewModal(bookId){
+      const dlg = document.getElementById('review-modal');
+      const ta = document.getElementById('review-text');
+      const saveBtn = document.getElementById('review-save');
+      ta.value = '';
+      let existingId = null;
+      try{
+        const r = await fetch(`/v1/feedback?book_id=${bookId}`);
+        const d = await r.json();
+        if (d.item){ ta.value = d.item.text || ''; existingId = d.item.id; }
+      }catch(e){}
+      saveBtn.onclick = async ()=>{
+        const text = ta.value;
+        if (existingId){ await fetch(`/v1/feedback/${existingId}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({text})}); }
+        else { await fetch('/v1/feedback', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, text})}); }
+        dlg.close();
+      };
+      dlg.showModal();
+    }
+    function setTyping(on){
+      const t = document.getElementById('chat-typing');
+      t.classList.toggle('hidden', !on);
+    }
+    async function sendChat(){
+      const inp = document.getElementById('chat-input');
+      const q = inp.value.trim(); if (!q) return;
+      appendChat('user', q.replaceAll('\n','<br/>'));
+      inp.value=''; setTyping(true);
+      const box = document.getElementById('chat-log');
+      const wrap = document.createElement('div'); wrap.className = 'flex justify-start my-2';
+      const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
+      bubble.textContent = '検索中…';
+      try{
+        const res = await fetch('/v1/search/llm/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query:q, limit:5})});
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let acc = '';
+        while(true){ const {value, done} = await reader.read(); if (done) break; const chunk = dec.decode(value, {stream:true});
+          for (const part of chunk.split(/\n\n/)){
+            if (!part) continue; if (part.startsWith('data: ')) acc += part.slice(6) + '\n';
+          }
+          bubble.innerHTML = acc.replaceAll('\n','<br/>');
+        }
+      } catch(e){ bubble.textContent = '検索に失敗しました'; }
+      finally { setTyping(false); }
+    }
+
+    window.addEventListener('DOMContentLoaded', async ()=>{
+      await loadFilters();
+      const q = qs('q') || '' || qs('author') || qs('era');
+      restoreFromQS();
+      if (!(qs('q')||qs('author')||qs('era'))) {
+        // 未検索状態
+        document.getElementById('results').innerHTML = '読み込み中…';
+        await loadInitialRanking();
+      }
+      // 初期メッセージ
+      appendChat('assistant', 'おかえりなさい！今日はどんな本を読みますか？');
+    });
   </script>
 </head>
 <body>
-  <header>
-    <a href="/web/index.html">← 戻る</a>
+  <header class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
+    <a href="/web/search.html" class="text-sky-700">← 戻る</a>
     <strong>検索</strong>
   </header>
-  <div class="container">
-    <div class="row" style="gap:8px;">
-      <input id="q" placeholder="キーワード/自然文" style="flex:1;min-width:220px;" onkeydown="onKey(event)" />
-      <input id="author" placeholder="作者（部分一致）" style="width:200px" onkeydown="onKey(event)" />
-      <select id="era" style="width:140px">
-        <option value="">時代</option>
-      </select>
-      <select id="genre" style="width:160px">
-        <option value="">タグ</option>
-      </select>
-      <button onclick="search()">検索</button>
+  <div class="p-4 grid grid-cols-10 gap-4">
+    <!-- 左：通常検索（6） -->
+    <div class="col-span-10 lg:col-span-6">
+      <div class="flex flex-wrap gap-2">
+        <input id="q" placeholder="キーワード/自然文" class="flex-1 min-w-[220px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
+        <input id="author" placeholder="作者（部分一致）" class="w-[200px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
+        <select id="era" class="w-[140px] border border-gray-300 rounded px-3 py-2">
+          <option value="">時代</option>
+        </select>
+        <button onclick="search()" class="bg-sky-500 text-white rounded px-4 py-2">検索</button>
+      </div>
+      <div id="results" class="mt-4 text-gray-600">条件を入力して検索してください。</div>
+      <div id="more" class="my-4"></div>
     </div>
-    <div id="results" style="margin-top:16px;">条件を入力して検索してください。</div>
-    <div id="more" style="margin:16px 0;"></div>
+
+    <!-- 右：チャット（4） -->
+    <div class="col-span-10 lg:col-span-4" id="chat-col">
+      <div class="border border-gray-200 rounded-lg sticky" style="top:64px;height: calc(100vh - 64px - 12px);">
+        <div class="h-full flex flex-col">
+          <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
+          <div id="chat-typing" class="px-3 pb-2 hidden text-gray-500 text-sm" aria-live="polite">アシスタントが入力中…</div>
+          <div class="border-t border-gray-200 p-2 flex gap-2">
+            <input id="chat-input" placeholder="おすすめの本を教えて" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){sendChat()}" />
+            <button onclick="sendChat()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <dialog id="review-modal" class="rounded max-w-xl w-[90vw]">
+    <div class="p-4 space-y-3">
+      <div class="text-lg font-semibold">感想</div>
+      <textarea id="review-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力"></textarea>
+      <div class="flex justify-end gap-2">
+        <button class="px-3 py-1 border rounded" onclick="document.getElementById('review-modal').close()">閉じる</button>
+        <button id="review-save" class="px-3 py-1 bg-sky-500 text-white rounded">保存</button>
+      </div>
+    </div>
+  </dialog>
 </body>
 </html>

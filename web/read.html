@@ -4,25 +4,40 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>読む</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { accent: '#93c5fd' } } }
+    };
+  </script>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
-    header { padding: 12px 16px; border-bottom: 1px solid #eee; display:flex; gap:12px; align-items:center; }
-    .container { padding: 16px; display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
-    .para { padding: 10px; border-radius: 6px; }
-    .para:hover { background: #fafafa; }
-    .muted { color: #666; font-size: 12px; }
-    button { padding: 6px 10px; border: 1px solid #ddd; background: #fff; border-radius: 6px; cursor: pointer; }
-    #side { position: sticky; top: 0; height: calc(100vh - 60px); overflow:auto; border-left:1px solid #eee; padding-left: 16px; }
-    pre { white-space: pre-wrap; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .skeleton { background: linear-gradient(90deg,#f0f0f0 25%,#e8e8e8 37%,#f0f0f0 63%); background-size:400% 100%; animation: shimmer 1.4s ease infinite; border:1px solid #eee; border-radius:6px; }
     @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+    .para { content-visibility: auto; contain-intrinsic-size: 1px 180px; scroll-margin-top: 72px; transition: background-color .15s ease-in-out; }
+    /* 選択(灰) + ハイライト(黄) が重なった場合の混色 */
+    .para.bg-gray-50.bg-yellow-50,
+    .para.bg-yellow-50.bg-gray-50 {
+      background-color: #F8F5DE !important; /* 淡い黄×灰の中間色 */
+    }
+    /* ホバー時も違和感のないように少しだけ濃く */
+    .para.bg-gray-50.bg-yellow-50:hover,
+    .para.bg-yellow-50.bg-gray-50:hover {
+      /* 混色のホバーはさらに薄く */
+      background-color: #FAF8E8 !important;
+    }
+    /* ハイライトのみ（黄）のホバーも少し薄く */
+    .para.bg-yellow-50:hover { background-color: #FFFEF2 !important; }
   </style>
   <script>
     function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
     let bookId = parseInt(qs('book_id') || '0', 10);
-    let selectedPara = null;
+    const selected = new Map(); // para_id -> para
+    const highlightsByPara = new Map(); // para_id -> highlight {id,...}
+    const paraElById = new Map();
+    const paraById = new Map();
     let offset = 0; const limit = 50; let loading=false; let total=0;
-    let restorePercent = null; let restored=false;
+    let restorePercent = null; let restoreIdx = null; let restored=false;
 
     async function loadBook() {
       const meta = await (await fetch(`/v1/books/${bookId}`)).json();
@@ -31,67 +46,172 @@
       try {
         const pr = await (await fetch(`/v1/progress?book_id=${bookId}`)).json();
         restorePercent = (typeof pr.scroll_percent === 'number') ? pr.scroll_percent : null;
-      } catch (e) { restorePercent = null; }
+        if (typeof pr.last_paragraph_index === 'number') restoreIdx = pr.last_paragraph_index;
+      } catch (e) { restorePercent = null; restoreIdx = null; }
       document.getElementById('paras').innerHTML = '';
       offset = 0; total = 0; restored=false; await loadMore();
+      // 既存ハイライトを復元
+      try{
+        const r = await fetch(`/v1/highlights?book_id=${bookId}`);
+        const data = await r.json();
+        for (const h of (data.items||[])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
+      }catch(e){}
+      // 翻訳・ギャラリーの復元
+      try{
+        const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
+        for (const t of (tr.items||[])){
+          const p = paraElById.get(t.para_id);
+          if (p){
+            const el = document.getElementById(`trans-${t.para_id}`) || (function(){
+              const d = document.createElement('div'); d.id = `trans-${t.para_id}`; d.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
+              d.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${t.para_id}"></div>`;
+              p.appendChild(d); return d; })();
+            const tx = document.getElementById(`trans-text-${t.para_id}`); if (tx) tx.textContent = t.text || '';
+            try{ localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text||''); }catch(_){ }
+          }
+        }
+      }catch(e){}
+      try{
+        const gl = await (await fetch(`/v1/gallery?book_id=${bookId}`)).json();
+        for (const g of (gl.items||[])){
+          const pids = (((g.meta||{}).paragraph_ids)||[]).filter(x=>typeof x==='number');
+          const last = pids.length ? pids[pids.length-1] : null;
+          const anchor = last ? paraElById.get(last) : document.getElementById('paras');
+          if (!anchor) continue;
+          const holder = document.createElement('div'); holder.className = 'my-3 relative group';
+          if (g.type==='image'){
+            holder.innerHTML = `<img src="${g.asset_url}" class="max-w-full border border-gray-200 rounded"/>`;
+          } else if (g.type==='video'){
+            holder.innerHTML = `<video src="${g.asset_url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
+          }
+          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
+          anchor.after(holder);
+        }
+      }catch(e){}
     }
 
-    function selectPara(p){
-      selectedPara = p;
-      document.getElementById('selected').textContent = `選択中: #${p.idx}`;
-      document.getElementById('qa-input').value = '';
-      document.getElementById('trans-out').textContent = '';
-      document.getElementById('qa-out').textContent = '';
+    function updateSelectionUI(){
+      const ids = Array.from(selected.keys());
+      const disabled = ids.length === 0;
+      for (const id of ['btn-hl','btn-trans','btn-img','btn-vid']){
+        const el = document.getElementById(id); if (el) el.disabled = disabled;
+      }
+      // チャット選択カード
+      const cards = document.getElementById('sel-cards');
+      cards.innerHTML = '';
+      for (const p of Array.from(selected.values()).sort((a,b)=>a.idx-b.idx)){
+        const c = document.createElement('div');
+        c.className = 'text-xs bg-gray-100 rounded px-2 py-1 flex items-center gap-2';
+        const head = p.text.slice(0,20).replaceAll('\n',' ');
+        c.innerHTML = `<span class="text-gray-700">${head}${p.text.length>20?'…':''}</span>`;
+        const x = document.createElement('button'); x.textContent='×'; x.className='text-gray-500'; x.onclick=()=>{toggleSelect(p)};
+        c.prepend(x);
+        cards.appendChild(c);
+      }
+    }
+
+    function toggleSelect(p){
+      if (selected.has(p.id)) { selected.delete(p.id); paraElById.get(p.id)?.classList.remove('bg-gray-50'); }
+      else { selected.set(p.id, p); paraElById.get(p.id)?.classList.add('bg-gray-50'); }
+      updateSelectionUI();
+    }
+
+    function clearSelection(){
+      for (const pid of selected.keys()) { paraElById.get(pid)?.classList.remove('bg-gray-50'); }
+      selected.clear(); updateSelectionUI();
     }
 
     async function doTranslate(){
-      if(!selectedPara){ alert('段落を選択してください'); return; }
-      const res = await fetch('/v1/translate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: selectedPara.id})});
-      const data = await res.json();
-      document.getElementById('trans-out').textContent = data.translation || '';
+      const sels = Array.from(selected.values());
+      if(!sels.length){ alert('段落を選択してください'); return; }
+      // 送信直後に選択解除（体感を軽く）
+      clearSelection();
+      for (const p of sels){
+        const el = document.getElementById(`trans-${p.id}`) || (function(){
+          const t = document.createElement('div'); t.id = `trans-${p.id}`; t.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
+          t.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${p.id}">翻訳中…</div>`;
+          paraElById.get(p.id)?.appendChild(t); return t; })();
+        try {
+          const res = await fetch('/v1/translate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: p.id})});
+          const data = await res.json();
+          document.getElementById(`trans-text-${p.id}`).textContent = data.translation || '';
+          try{ localStorage.setItem(`tr:${bookId}:${p.id}`, data.translation||''); }catch(e){}
+        } catch(e){
+          document.getElementById(`trans-text-${p.id}`).textContent = '翻訳に失敗しました';
+        }
+      }
     }
 
     async function doQA(){
-      const q = document.getElementById('qa-input').value.trim();
-      if(!q){ alert('質問を入力してください'); return; }
-      const res = await fetch('/v1/qa', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, question: q})});
-      const data = await res.json();
-      document.getElementById('qa-out').textContent = data.answer || '';
+      const q = document.getElementById('chat-input').value.trim();
+      if(!q){ return; }
+      appendChat('user', q.replaceAll('\n','<br/>'));
+      document.getElementById('chat-input').value = '';
+      setTyping(true);
+      const box = document.getElementById('chat-log');
+      const wrap = document.createElement('div'); wrap.className = 'flex justify-start my-2';
+      const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
+      bubble.textContent = '回答を生成中…';
+      try {
+        const context = Array.from(selected.values()).sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
+        const res = await fetch('/v1/qa/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, question: q, context})});
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let acc='';
+        while(true){ const {value, done} = await reader.read(); if (done) break; const chunk = dec.decode(value, {stream:true});
+          for (const part of chunk.split(/\n\n/)){
+            if (!part) continue; if (part.startsWith('data: ')) acc += part.slice(6);
+          }
+          bubble.innerHTML = acc.replaceAll('\n','<br/>');
+        }
+      } catch(e){ bubble.textContent = '回答に失敗しました'; }
+      finally { setTyping(false); clearSelection(); }
     }
 
     async function saveHighlight(){
-      if(!selectedPara){ alert('段落を選択してください'); return; }
-      await fetch('/v1/highlights', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: selectedPara.id, span_start: 0, span_end: selectedPara.text.length})});
-      alert('ハイライトを保存しました（段落全体）');
+      const sels = Array.from(selected.values());
+      if(!sels.length){ alert('段落を選択してください'); return; }
+      // 送信直後に選択解除
+      clearSelection();
+      for (const p of sels){
+        const existing = highlightsByPara.get(p.id);
+        if (existing){
+          // 先にUIを更新→削除API
+          highlightsByPara.delete(p.id); markHighlighted(p.id, false);
+          try{ await fetch(`/v1/highlights/${existing.id}`, {method:'DELETE'}); }catch(e){}
+        }else{
+          // 先にUIを更新→作成API
+          markHighlighted(p.id, true);
+          try{
+            const res = await fetch('/v1/highlights', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: p.id, span_start: 0, span_end: p.text.length})});
+            const data = await res.json();
+            highlightsByPara.set(p.id, {id: data.id, para_id: p.id});
+          }catch(e){ /* 失敗時は次回操作で整合 */ }
+        }
+      }
     }
 
     // Image generation from selected paragraph
     let imgController = null;
     async function generateImage(){
-      if(!selectedPara){ alert('段落を選択してください'); return; }
-      const btn = document.getElementById('gen-btn');
-      const cancel = document.getElementById('gen-cancel');
-      const status = document.getElementById('gen-status');
-      const skel = document.getElementById('gen-img-skel');
-      const img = document.getElementById('gen-img');
-      btn.disabled = true; cancel.disabled = false; status.textContent = '生成中…'; skel.style.display = 'block'; img.src = '';
+      const sels = Array.from(selected.values()); if(!sels.length){ alert('段落を選択してください'); return; }
+      clearSelection();
+      const last = sels.sort((a,b)=>a.idx-b.idx)[sels.length-1];
+      const targetEl = paraElById.get(last.id);
+      const holder = document.createElement('div'); holder.className = 'my-3 relative group';
+      holder.innerHTML = `<div class="skeleton w-full h-48"></div><div class="text-xs text-gray-500 mt-1">生成中…</div>`;
+      targetEl.after(holder);
       imgController = new AbortController();
       try{
-        const res = await fetch('/v1/generate/image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source: selectedPara.text}), signal: imgController.signal});
+        const source = sels.sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
+        const res = await fetch('/v1/generate/image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source, paragraph_ids: sels.map(x=>x.id)}), signal: imgController.signal});
         if (!res.ok){ throw new Error('request failed'); }
-        const data = await res.json();
-        let url = data.asset_url || '';
-        if (url.startsWith('gs://')){
-          const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
-          if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; }
+        const data = await res.json(); let url = data.asset_url || '';
+        if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
+        holder.innerHTML = `<img src="${url}" alt="generated" class="max-w-full border border-gray-200 rounded"/>`;
+        if (data.gallery_id){
+          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
-        img.src = url; img.alt='generated image';
-        status.textContent = '完了';
-      }catch(e){
-        status.textContent = (e.name === 'AbortError') ? 'キャンセルしました' : '失敗';
-      } finally {
-        skel.style.display = 'none'; btn.disabled = false; cancel.disabled = true; imgController = null;
-      }
+      }catch(e){ holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
+      finally { imgController = null; }
     }
     function cancelImage(){ if (imgController) imgController.abort(); }
 
@@ -102,26 +222,25 @@
       total = data.total || 0;
       const list = document.getElementById('paras');
       for (const p of data.items || []) {
+        paraById.set(p.id, p);
         const el = document.createElement('div');
-        el.className = 'para';
-        el.dataset.paraId = p.id;
-        el.dataset.idx = p.idx;
-        el.innerHTML = `<div class="muted">#${p.idx}</div><div>${p.text.replaceAll('\n','<br/>')}</div>`;
-        el.addEventListener('click', ()=> selectPara(p));
-        list.appendChild(el);
+        el.className = 'para rounded hover:bg-gray-50 p-2';
+        el.dataset.paraId = p.id; el.dataset.idx = p.idx;
+        el.innerHTML = `<div class="leading-relaxed">${p.text.replaceAll('\n','<br/>')}</div>`;
+        el.addEventListener('click', ()=> toggleSelect(p));
+        list.appendChild(el); paraElById.set(p.id, el);
+        // 翻訳のローカル復元
+        const cached = localStorage.getItem(`tr:${bookId}:${p.id}`);
+        if (cached){
+          const t = document.createElement('div'); t.id = `trans-${p.id}`; t.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
+          t.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${p.id}"></div>`;
+          el.appendChild(t);
+          document.getElementById(`trans-text-${p.id}`).textContent = cached;
+        }
       }
       offset += (data.items || []).length;
       loading=false;
-      // restore scroll position once
-      if (!restored && restorePercent != null && total > 0) {
-        const targetIdx = Math.max(0, Math.floor((total * restorePercent) / 100) - 2);
-        if (offset >= targetIdx) {
-          const targetEl = document.querySelector(`.para[data-idx="${targetIdx}"]`);
-          if (targetEl) { targetEl.scrollIntoView({behavior:'instant', block:'start'}); restored=true; }
-        } else {
-          loadMore();
-        }
-      }
+      // defer scroll restore; final adjust will run after initial enrich (translations/gallery)
     }
 
     function onScroll(){
@@ -136,98 +255,213 @@
     }
 
     let lastSaved = -1; let saveTimer=null;
+    function firstVisibleIdx(){
+      const paras = document.querySelectorAll('.para');
+      let best = null; let bestTop = Infinity;
+      for (const el of paras){
+        const r = el.getBoundingClientRect();
+        if (r.bottom < 0) continue; // above
+        const dist = Math.abs(r.top);
+        if (dist < bestTop){ bestTop = dist; best = el; }
+      }
+      return best ? parseInt(best.dataset.idx||'0',10) : null;
+    }
     function maybeSaveProgress(percent){
       if (Math.abs(percent - lastSaved) < 5) return;
       clearTimeout(saveTimer);
       saveTimer = setTimeout(async ()=>{
         lastSaved = percent;
-        await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent})});
+        const idx = firstVisibleIdx();
+        await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent, last_paragraph_index: idx})});
       }, 500);
     }
 
-    window.addEventListener('DOMContentLoaded', ()=>{ loadBook(); window.addEventListener('scroll', onScroll, {passive:true}); });
+    async function restoreToIdxOnce(){
+      if (restored) return;
+      let targetIdx = null;
+      if (restoreIdx != null) targetIdx = restoreIdx;
+      else if (restorePercent != null && total) targetIdx = Math.max(0, Math.floor((total * restorePercent) / 100) - 2);
+      if (targetIdx == null) { restored = true; return; }
+      while (offset <= targetIdx && offset < total){ await loadMore(); }
+      setTimeout(()=>{
+        const el = document.querySelector(`[data-idx="${targetIdx}"]`);
+        if (el){ el.scrollIntoView({behavior:'instant', block:'start'}); }
+        restored = true;
+      }, 0);
+    }
+
+    window.addEventListener('DOMContentLoaded', ()=>{ loadBook().then(()=>restoreToIdxOnce()); window.addEventListener('scroll', onScroll, {passive:true}); appendChat('assistant','本に関する疑問をどうぞ。'); });
 
     async function generateVideo(){
-      if(!selectedPara){ alert('段落を選択してください'); return; }
-      const btn = document.getElementById('vid-btn');
-      const cancel = document.getElementById('vid-cancel');
-      const status = document.getElementById('vid-status');
-      const skel = document.getElementById('gen-video-skel');
-      const vid = document.getElementById('gen-video');
-      btn.disabled = true; cancel.disabled = false; status.textContent = '生成中…'; skel.style.display='block'; vid.src='';
-      const aspect = document.getElementById('vid-aspect').value;
+      const sels = Array.from(selected.values()); if(!sels.length){ alert('段落を選択してください'); return; }
+      clearSelection();
+      const aspect = '16:9';
+      const last = sels.sort((a,b)=>a.idx-b.idx)[sels.length-1];
+      const targetEl = paraElById.get(last.id);
+      const holder = document.createElement('div'); holder.className = 'my-3 relative group';
+      holder.innerHTML = `<div class="skeleton w-full h-48"></div><div class="text-xs text-gray-500 mt-1">生成中…</div>`;
+      targetEl.after(holder);
       vidController = new AbortController();
       try{
-        const res = await fetch('/v1/generate/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source: selectedPara.text, aspect}), signal: vidController.signal});
+        const source = sels.sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
+        const res = await fetch('/v1/generate/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source, aspect, paragraph_ids: sels.map(x=>x.id)}), signal: vidController.signal});
         if (!res.ok){ throw new Error('request failed'); }
-        const data = await res.json();
-        let url = data.asset_url || (data.video_uris && data.video_uris[0]) || '';
-        if (url.startsWith('gs://')){
-          const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/);
-          if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; }
+        const data = await res.json(); let url = data.asset_url || (data.video_uris && data.video_uris[0]) || '';
+        if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
+        holder.innerHTML = `<video src="${url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
+        if (data.gallery_id){
+          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
-        vid.src = url;
-        status.textContent = '完了';
-      }catch(e){
-        status.textContent = (e.name === 'AbortError') ? 'キャンセルしました' : '失敗';
-      } finally {
-        skel.style.display='none'; btn.disabled = false; cancel.disabled = true; vidController = null;
-      }
+      }catch(e){ holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
+      finally { vidController = null; }
     }
     function cancelVideo(){ if (vidController) vidController.abort(); }
+
+    function markHighlighted(paraId, on){
+      const el = paraElById.get(paraId); if (!el) return;
+      if (on) el.classList.add('bg-yellow-50'); else el.classList.remove('bg-yellow-50');
+    }
+
+    // チャット（右）
+    function appendChat(role, html){
+      const box = document.getElementById('chat-log');
+      const wrap = document.createElement('div');
+      wrap.className = `flex ${role==='user' ? 'justify-end' : 'justify-start'} my-2`;
+      const bubble = document.createElement('div');
+      bubble.className = `max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role==='user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
+      bubble.innerHTML = html;
+      wrap.appendChild(bubble);
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+    }
+    function setTyping(on){ document.getElementById('chat-typing').classList.toggle('hidden', !on); }
+    function openJumpModal(){
+      const modal = document.getElementById('jump-modal');
+      const list = document.getElementById('jump-list');
+      list.innerHTML='';
+      const arr = Array.from(highlightsByPara.entries());
+      if (!arr.length){ list.innerHTML = '<div class="text-sm text-gray-500">ハイライトはありません</div>'; }
+      for (const [pid, h] of arr){
+        const p = paraById.get(pid);
+        const btn = document.createElement('button');
+        btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded border border-gray-200 my-1';
+        const head = (p?.text||'').replaceAll('\n',' ').slice(0,20);
+        btn.textContent = `${head}${(p?.text||'').length>20?'…':''}`;
+        btn.onclick = ()=>{ modal.close(); paraElById.get(pid)?.scrollIntoView({behavior:'smooth', block:'center'}); };
+        list.appendChild(btn);
+      }
+      modal.showModal();
+    }
+
+    async function deleteAsset(galleryId, holder){
+      // 先に即座にDOMから除去して体感を速く
+      if (holder && holder.parentNode) holder.parentNode.removeChild(holder);
+      try{ fetch(`/v1/gallery/${galleryId}`, {method:'DELETE'}).catch(()=>{}); }catch(e){}
+    }
   </script>
 </head>
 <body>
-  <header>
-    <a href="/web/index.html">← 戻る</a>
-    <div>
-      <div id="title" style="font-weight:bold"></div>
-      <div id="author" class="muted"></div>
+  <header class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
+    <a href="/web/search.html" class="text-sky-700">← 戻る</a>
+    <div class="flex-1">
+      <div id="title" class="font-semibold"></div>
+      <div id="author" class="text-gray-500 text-sm"></div>
     </div>
+    <button id="chat-toggle-header" class="text-sm text-sky-700" onclick="toggleChat()">チャットを隠す</button>
   </header>
-  <div class="container">
-    <div id="main">
+  <div class="p-4 grid grid-cols-10 gap-4">
+    <!-- 本文（6） -->
+    <div id="left-col" class="col-span-10 lg:col-span-6 pb-24">
       <div id="paras">読み込み中…</div>
+      <!-- 左カラム内・下部固定（sticky）アクションバー -->
+      <div class="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur z-10 mt-4 py-2">
+        <div class="flex items-center gap-2">
+          <button id="btn-hl" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="saveHighlight()" disabled>ハイライトする</button>
+          <button id="btn-trans" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="doTranslate()" disabled>ここだけ翻訳</button>
+          <button id="btn-img" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="generateImage()" disabled>挿絵を生成</button>
+          <button id="btn-vid" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="generateVideo()" disabled>動く挿絵を生成</button>
+          <div class="ml-auto">
+            <button id="btn-jump" class="px-3 py-2 border border-gray-300 rounded" onclick="openJumpModal()">ハイライトに移動</button>
+          </div>
+        </div>
+      </div>
+      <div class="my-6">
+        <button class="px-4 py-2 rounded bg-sky-500 text-white" onclick="openCompleteModal()">読了</button>
+      </div>
+      <div class="h-16"></div>
     </div>
-    <div id="side">
-      <div id="selected" class="muted">選択中: なし</div>
-      <div style="margin-top:12px;">
-        <button onclick="doTranslate()">ここだけ訳す</button>
-        <button onclick="saveHighlight()" style="margin-left:8px;">段落をハイライト</button>
-        <pre id="trans-out"></pre>
-      </div>
-      <div style="margin-top:12px;">
-        <button id="gen-btn" onclick="generateImage()">挿絵を生成</button>
-        <button id="gen-cancel" onclick="cancelImage()" disabled>キャンセル</button>
-        <div id="gen-status" class="muted" style="margin-top:6px;"></div>
-        <div style="margin-top:6px;">
-          <div id="gen-img-skel" class="skeleton" style="width:100%;height:200px;display:none;"></div>
-          <img id="gen-img" style="max-width:100%;border:1px solid #eee;border-radius:6px;"/>
+
+    <!-- チャット（4） -->
+    <div id="chat-col" class="col-span-10 lg:col-span-4">
+      <div class="border border-gray-200 rounded-lg sticky" style="top:64px;height: calc(100vh - 64px - 12px);">
+        <div class="h-full flex flex-col">
+          <div class="p-2 border-b border-gray-200 flex justify-between items-center">
+            <div class="text-sm text-gray-600">チャット</div>
+            <button class="text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
+          </div>
+          <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
+          <div id="chat-typing" class="px-3 pb-2 hidden text-gray-500 text-sm" aria-live="polite">アシスタントが入力中…</div>
+          <div class="border-t border-gray-200 p-2 space-y-2">
+            <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
+            <div class="flex gap-2">
+              <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){doQA()}" />
+              <button onclick="doQA()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
+            </div>
+          </div>
         </div>
       </div>
-      <div style="margin-top:12px;">
-        <div class="muted" style="margin-bottom:6px;">動画（Veo）</div>
-        <div style="display:flex; gap:8px; align-items:center;">
-          <select id="vid-aspect" style="padding:6px 8px; border:1px solid #ddd; border-radius:6px;">
-            <option value="1:1">1:1</option>
-            <option value="16:9" selected>16:9</option>
-            <option value="9:16">9:16</option>
-          </select>
-          <button id="vid-btn" onclick="generateVideo()">動画を生成</button>
-          <button id="vid-cancel" onclick="cancelVideo()" disabled>キャンセル</button>
-        </div>
-        <div id="vid-status" class="muted" style="margin-top:6px;"></div>
-        <div style="margin-top:6px;">
-          <div id="gen-video-skel" class="skeleton" style="width:100%;height:200px;display:none;"></div>
-          <video id="gen-video" style="max-width:100%;border:1px solid #eee;border-radius:6px;" controls></video>
-        </div>
-      </div>
-      <div style="margin-top:12px;">
-        <input id="qa-input" placeholder="質問を入力" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;" />
-        <div style="margin-top:6px;"><button onclick="doQA()">質問する</button></div>
-        <pre id="qa-out"></pre>
-      </div>
+      
     </div>
   </div>
+
+  <!-- 固定バー（全体幅）は削除し左カラム内stickyへ移設 -->
+
+  <dialog id="jump-modal" class="rounded max-w-xl w-[90vw]">
+    <div class="p-4">
+      <div class="text-lg font-semibold mb-2">ハイライト一覧</div>
+      <div id="jump-list" class="max-h-[60vh] overflow-auto"></div>
+      <div class="text-right mt-3"><button class="px-3 py-1 border rounded" onclick="document.getElementById('jump-modal').close()">閉じる</button></div>
+    </div>
+  </dialog>
+  <dialog id="complete-modal" class="rounded max-w-xl w-[90vw]">
+    <div class="p-4 space-y-3">
+      <div class="text-lg font-semibold">お疲れ様でした！感想を書いてみませんか？</div>
+      <textarea id="complete-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力（任意）"></textarea>
+      <div class="flex justify-end gap-2">
+        <button class="px-3 py-1 border rounded" onclick="document.getElementById('complete-modal').close()">後で</button>
+        <button id="complete-save" class="px-3 py-1 bg-sky-500 text-white rounded">保存して閉じる</button>
+      </div>
+    </div>
+  </dialog>
+  <script>
+    function toggleChat(){
+      const chat = document.getElementById('chat-col');
+      const left = document.getElementById('left-col');
+      const headerBtn = document.getElementById('chat-toggle-header');
+      if (!chat.classList.contains('hidden')){
+        chat.classList.add('hidden');
+        left.classList.remove('lg:col-span-6');
+        left.classList.add('lg:col-span-10');
+        if (headerBtn) headerBtn.textContent = 'チャットを表示';
+      } else {
+        chat.classList.remove('hidden');
+        left.classList.remove('lg:col-span-10');
+        left.classList.add('lg:col-span-6');
+        if (headerBtn) headerBtn.textContent = 'チャットを隠す';
+      }
+    }
+    function openCompleteModal(){
+      const dlg = document.getElementById('complete-modal');
+      const ta = document.getElementById('complete-text'); ta.value='';
+      const save = document.getElementById('complete-save');
+      save.onclick = async ()=>{
+        const text = ta.value.trim();
+        await fetch('/v1/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:bookId})});
+        if (text){ await fetch('/v1/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:bookId, text})}); }
+        dlg.close();
+      };
+      dlg.showModal();
+    }
+  </script>
 </body>
 </html>

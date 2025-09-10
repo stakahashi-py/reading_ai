@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ...security.auth import get_current_user
 from ...db.session import get_db, SessionLocal
-from ...models.models import GenerationJob
+from ...models.models import GenerationJob, Gallery
 
 router = APIRouter()
 
@@ -215,7 +215,17 @@ def generate_image(
     job.result = {"asset_url": url}
     db.add(job)
     db.commit()
-    return {"asset_url": url}
+    # ギャラリーへ保存
+    try:
+        paragraph_ids = payload.get("paragraph_ids")
+        meta = {"style": style, "aspect": aspect, "paragraph_ids": paragraph_ids}
+        g = Gallery(user_id=user["uid"], book_id=book_id, asset_url=url, type="image", prompt=source, meta=meta)
+        db.add(g)
+        db.commit()
+        gid = g.id
+    except Exception:
+        gid = None
+    return {"asset_url": url, "gallery_id": gid}
 
 
 @router.post("/video")
@@ -264,7 +274,19 @@ def generate_video(
     job.result = {"video_uris": public, "raw": result}
     db.add(job)
     db.commit()
-    return {"asset_url": primary, "video_uris": public, "done": True}
+    # ギャラリーへ保存
+    try:
+        paragraph_ids = payload.get("paragraph_ids")
+        meta = {"style": style, "aspect": aspect, "paragraph_ids": paragraph_ids}
+        gid = None
+        if primary:
+            g = Gallery(user_id=user["uid"], book_id=book_id, asset_url=primary, type="video", prompt=source, meta=meta)
+            db.add(g)
+            db.commit()
+            gid = g.id
+    except Exception:
+        gid = None
+    return {"asset_url": primary, "video_uris": public, "done": True, "gallery_id": gid}
 
 
 @router.get("/{job_id}/status")
