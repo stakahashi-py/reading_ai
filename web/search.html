@@ -38,7 +38,7 @@
 
     async function loadMore(){
       if (loading) return; loading = true;
-      const res = await fetch('/v1/search/llm', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({...lastBody, offset: sOffset, limit: sLimit}) });
+      const res = await fetch('/v1/search/title', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({...lastBody, offset: sOffset, limit: sLimit}) });
       const data = await res.json();
       total = data.total || 0;
       renderResults(data.items || [], sOffset === 0);
@@ -234,7 +234,7 @@
     <!-- 左：通常検索（6） -->
     <div class="col-span-10 lg:col-span-6">
       <div class="flex flex-wrap gap-2">
-        <input id="q" placeholder="キーワード/自然文" class="flex-1 min-w-[220px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
+        <input id="q" placeholder="タイトル（完全一致/部分一致）" class="flex-1 min-w-[220px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
         <input id="author" placeholder="作者（部分一致）" class="w-[200px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
         <select id="era" class="w-[140px] border border-gray-300 rounded px-3 py-2">
           <option value="">時代</option>
