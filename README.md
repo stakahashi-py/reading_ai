@@ -1,57 +1,96 @@
-AI Bunko Reader (MVP)
+AI 文庫リーダー（MVP）
 
-This repository contains the MVP backend skeleton following the latest requirements in `docs/requirements.md`.
+本リポジトリは、青空文庫テキストを読みやすくするためのミニマルな「検索・閲覧・翻訳・Q&A・挿絵/動画生成」アプリのMVPです。バックエンドは FastAPI、DB は PostgreSQL（pgvector/pg_trgm）を利用します。静的フロントは `web/` 直下にあり、API から配信されます。
 
-- Stack: FastAPI (Python), SQLAlchemy, PostgreSQL (pgvector), Firebase Auth
-- Deploy target: Cloud Run + Cloud SQL + Cloud Storage + Cloud Tasks + Vertex AI (single environment)
+主なスタック
+- FastAPI（Python）/ SQLAlchemy
+- PostgreSQL + 拡張: `vector`, `pg_trgm`
+- Google Gemini（google-genai; Vertex AI または API Key）
+- Firebase Auth（ローカル開発では無効化可）
 
-Structure
-- `apps/api`: FastAPI app and routers for `/v1/*`
-- `apps/api/security/auth.py`: Firebase Auth verification dependency
-- `apps/api/models`: SQLAlchemy ORM models (placeholders for vector columns)
-- `db/schema.sql`: Raw SQL to create all tables, extensions, and indexes
-- `workers/generator`: Stub for image/video generation jobs
-- `ingestor/aozora`: Stub for Aozora ingestion pipeline
-- `web/`: Minimal static frontend (books list, reading view)
+リポジトリ構成
+- `apps/api`: FastAPI 本体（`/v1/*` ルーター）
+- `apps/api/security/auth.py`: Firebase 認証（ローカルでは `AUTH_DISABLED=true` で無効化）
+- `apps/api/models/models.py`: ORM モデル
+- `db/schema.sql`: テーブル・拡張・インデックス作成スクリプト
+- `preprocessing/`: 事前処理スクリプト群（スキーマ適用/取得/取り込み/ベクトル化）
+- `web/`: 検索画面（`search.html`）と読書画面（`read.html`）
+- `docs/requirements.md`: 要件定義・仕様メモ
 
-Setup (local)
-1. Python env and deps
-   - `python -m venv .venv && source .venv/bin/activate`
-   - `pip install -r requirements.txt`
-2. Configure env
-   - Copy `.env.example` to `.env` and edit values (or export env vars)
-3. Database schema (raw SQL)
-   - Ensure PostgreSQL/Cloud SQL is reachable
-   - If using Cloud SQL connector (recommended): set `.env` with `CONNECTION_NAME`, `DB_USER`, `DB_NAME`, `DB_PASS` (or IAM auth)
-   - Or set `DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db`
-   - Apply schema: `make db-apply` (or `python scripts/apply_schema.py`)
-4. Run API
-   - `make run-api` and open `http://localhost:8000/web/index.html`
+必要環境
+- Python 3.10 以上
+- PostgreSQL 14 以上（拡張: `vector`, `pg_trgm`）
+- Google Cloud（任意）: Vertex AI / Cloud SQL / Cloud Storage（生成物保存用）
 
-Auth
-- Firebase Auth tokens are verified by default.
-- For local dev, set `AUTH_DISABLED=true` to bypass authentication. When enabled, endpoints that require auth accept missing Authorization and act as a dev user.
+環境変数（抜粋）
+- DB 接続（いずれか）
+  - `CONNECTION_NAME`, `DB_USER`, `DB_NAME`, `DB_PASS`（Cloud SQL Connector）
+  - もしくは `DATABASE_URL`（例: `postgresql+psycopg://user:pass@host:5432/db`）
+- モデル関連: `PROJECT_ID`, `VERTEX_LOCATION`（例: `asia-northeast1` または `us-central1`）, 代替として `GOOGLE_API_KEY`
+- 認証: `FIREBASE_PROJECT_ID`, `AUTH_DISABLED=true`（ローカル開発向け）
+- 生成出力: `ASSETS_BUCKET`, `ASSETS_URL_PREFIX`（任意）, `VEO_MODEL_ID`
 
-Notes
-- Vector columns (`paragraphs.embed`, `tastes.vector`) are created as `vector` in `db/schema.sql` (requires `pgvector`). ORM currently uses generic JSON placeholders; we can add `sqlalchemy-pgvector` later for strong typing.
-- Generation and embedding logic are stubs; connect to Vertex AI and Cloud Tasks in subsequent steps.
-- Gemini (google-genai) backs `/v1/translate` and `/v1/qa`. Set `PROJECT_ID` and `VERTEX_LOCATION` envs for Vertex AI.
+セットアップ（ローカル）
+1) 依存関係のインストール
+- `python -m venv .venv && source .venv/bin/activate`
+- `pip install -r requirements.txt`
 
-Frontend (MVP)
-- Navigate to `/web/index.html` for books, then open a book to read and try:
-  - Translate a selected paragraph via `/v1/translate`
-  - Ask QA via `/v1/qa`
-- Search UI is available at `/web/search.html` (query, author/era/tag filters). Results link to reading view.
+2) 環境変数の設定
+- `.env.example` を参考に `.env` を作成し、上記の値を設定してください。
 
-Generation Jobs
-- `POST /v1/generate/image|video` enqueues a DB job in `generation_jobs`.
-- `GET /v1/generate/{job_id}/status` returns current status/result.
-- Worker is a stub; connect to Vertex Imagen/Veo and update job status in a background service.
+重要: 実行前の前処理
+- 本アプリを起動する前に、`preprocessing` 配下のスクリプトを「上から順に」実行してください（番号順）。
+- 代表的な実行手順は以下です。
 
-Next
-- Implement Librarian (hybrid search) and Recommender logic
-- Connect Cloud Tasks and job status persistence
-- Add embedding worker and ingestion CLI
-- DB connections
-  - API uses Cloud SQL connector when `CONNECTION_NAME/DB_USER/DB_NAME` are set (driver: pg8000). Otherwise falls back to `DATABASE_URL`.
-  - The ingestion script `ingest_aozora_html.py` uses the same connector style for consistency.
+1. スキーマ適用（拡張作成含む）
+   - Cloud SQL を使う場合: `python preprocessing/01_apply_schema.py`
+   - あるいは手動: お使いの DB で `db/schema.sql` を実行
+
+2. 青空文庫データの取得（任意・必要に応じて）
+   - `python preprocessing/02_get_data.py`
+   - `aozora_html/` に本文 HTML が保存されます（既に用意済みなら不要）。
+
+3. 本文 HTML の取り込み（CSV 作成）
+   - 例: `python preprocessing/03_ingest_aozora_html.py --out-dir preprocessing --limit 50`
+   - メタ生成に Gemini を使用（`PROJECT_ID` もしくは `GOOGLE_API_KEY` が必要。`--no-llm` で無効化可）。
+   - 注意: `04_copy_csv_to_db.py` が参照するのは `preprocessing/books.csv` と `preprocessing/paragraphs.csv` です。上記のように `--out-dir preprocessing` を指定してください（未指定だと `preprocessing/out_csv/` に出力されます）。
+
+4. CSV を DB へ投入
+   - `python preprocessing/04_copy_csv_to_db.py`
+   - Cloud SQL Connector（`CONNECTION_NAME`, `DB_USER`, `DB_NAME`, `DB_PASS`）を利用します。
+
+5. 段落ベクトルの作成（pgvector への保存）
+   - `python preprocessing/05_vectorize_paragraph.py`
+   - Embedding: `text-embedding-004`（google-genai）。`PROJECT_ID`+`VERTEX_LOCATION` または `GOOGLE_API_KEY` が必要です。
+
+アプリの起動
+- `uvicorn apps.api.main:app --reload`
+- ヘルスチェック: `http://localhost:8000/healthz`
+- 画面
+  - 検索: `http://localhost:8000/web/search.html`
+  - 読む: `http://localhost:8000/web/read.html?book_id=<ID>`
+
+認証について
+- 既定では Firebase トークン検証を行います。ローカル開発では `.env` に `AUTH_DISABLED=true` を設定すると認証をバイパスできます。
+
+主な API（/v1）
+- `GET /v1/books`, `GET /v1/books/{book_id}`, `GET /v1/books/{book_id}/paragraphs`
+- `POST /v1/search/title`（タイトル専用の高速検索）/ `POST /v1/search/llm`（ハイブリッド）
+- `POST /v1/translate`（段落の現代語訳）
+- `POST /v1/qa` / `POST /v1/qa/stream`（Q&A）
+- `POST /v1/highlights` / `GET /v1/highlights`
+- `POST /v1/generate/image` / `POST /v1/generate/video` / `GET /v1/generate/{job_id}/status`
+- `POST /v1/progress` / `GET /v1/progress` / `POST /v1/complete`
+- `POST /v1/feedback` / `GET /v1/feedback` / `PUT /v1/feedback/{id}`
+
+トラブルシューティング
+- DB 接続に失敗する: `CONNECTION_NAME/DB_USER/DB_NAME/DB_PASS` または `DATABASE_URL` を確認。
+- `vector`/`pg_trgm` が無い: `CREATE EXTENSION vector; CREATE EXTENSION pg_trgm;` を実行。
+- 検索結果が空: 事前処理（特に CSV 投入とベクトル化）を実行済みか確認。
+
+ライセンス/出典
+- 青空文庫のテキストは各作品の配布条件に従ってご利用ください。本アプリは教育・検証目的のMVPです。
+
+リンク
+- 仕様: `docs/requirements.md`
+- スキーマ: `db/schema.sql`
