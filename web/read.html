@@ -10,6 +10,9 @@
       theme: { extend: { colors: { accent: '#93c5fd' } } }
     };
   </script>
+  <!-- Markdown renderer + sanitizer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .skeleton { background: linear-gradient(90deg,#f0f0f0 25%,#e8e8e8 37%,#f0f0f0 63%); background-size:400% 100%; animation: shimmer 1.4s ease infinite; border:1px solid #eee; border-radius:6px; }
@@ -38,6 +41,8 @@
     const paraById = new Map();
     let offset = 0; const limit = 50; let loading=false; let total=0;
     let restorePercent = null; let restoreIdx = null; let restored=false;
+    // QAチャット履歴（サーバーに送る前提の最小フォーマット）
+    const chatHistory = []; // [{role:'user'|'assistant', content:string}]
 
     async function loadBook() {
       const meta = await (await fetch(`/v1/books/${bookId}`)).json();
@@ -145,7 +150,9 @@
     async function doQA(){
       const q = document.getElementById('chat-input').value.trim();
       if(!q){ return; }
+      const past = chatHistory.slice(); // 直前までの履歴をサーバーへ
       appendChat('user', q.replaceAll('\n','<br/>'));
+      chatHistory.push({role:'user', content: q});
       document.getElementById('chat-input').value = '';
       setTyping(true);
       const box = document.getElementById('chat-log');
@@ -153,17 +160,32 @@
       const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
       bubble.textContent = '回答を生成中…';
       try {
-        const context = Array.from(selected.values()).sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
-        const res = await fetch('/v1/qa/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, question: q, context})});
-        const reader = res.body.getReader(); const dec = new TextDecoder(); let acc='';
-        while(true){ const {value, done} = await reader.read(); if (done) break; const chunk = dec.decode(value, {stream:true});
-          for (const part of chunk.split(/\n\n/)){
-            if (!part) continue; if (part.startsWith('data: ')) acc += part.slice(6);
-          }
-          bubble.innerHTML = acc.replaceAll('\n','<br/>');
-        }
-      } catch(e){ bubble.textContent = '回答に失敗しました'; }
-      finally { setTyping(false); clearSelection(); }
+        // 送信時に選択解除：まず文脈を確定→UIからは即時解除
+        const ordered = Array.from(selected.values()).sort((a,b)=>a.idx-b.idx);
+        const context = ordered.map(p=>p.text).join('\n');
+        clearSelection();
+        const res = await fetch('/v1/qa', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({book_id: bookId, question: q, context, history: past})
+        });
+        if (!res.ok) throw new Error('request failed');
+        const data = await res.json();
+        const answer = (data && data.answer) ? String(data.answer) : '';
+        // Markdown を HTML 化（サニタイズ付き）。失敗時はプレーンテキスト。
+        try{
+          const html = (window.marked && window.DOMPurify)
+            ? DOMPurify.sanitize(marked.parse(answer, { breaks: true }))
+            : null;
+          if (html != null){ bubble.innerHTML = html; }
+          else { bubble.style.whiteSpace = 'pre-wrap'; bubble.textContent = answer; }
+        }catch(_){ bubble.style.whiteSpace = 'pre-wrap'; bubble.textContent = answer; }
+        chatHistory.push({role:'assistant', content: answer});
+      } catch(e){
+        bubble.textContent = '回答に失敗しました';
+      } finally {
+        setTyping(false);
+      }
     }
 
     async function saveHighlight(){
@@ -334,7 +356,13 @@
       box.appendChild(wrap);
       box.scrollTop = box.scrollHeight;
     }
-    function setTyping(on){ document.getElementById('chat-typing').classList.toggle('hidden', !on); }
+    function resetChatHistory(){
+      chatHistory.length = 0; // 配列を空に
+      const box = document.getElementById('chat-log');
+      box.innerHTML = '';
+      appendChat('assistant','本に関する疑問をどうぞ。');
+    }
+    function setTyping(on){ const t = document.getElementById('chat-typing'); if (!t) return; t.classList.toggle('hidden', !on); }
     function openJumpModal(){
       const modal = document.getElementById('jump-modal');
       const list = document.getElementById('jump-list');
@@ -397,10 +425,13 @@
         <div class="h-full flex flex-col">
           <div class="p-2 border-b border-gray-200 flex justify-between items-center">
             <div class="text-sm text-gray-600">チャット</div>
-            <button class="text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
+            <div class="flex items-center gap-3">
+              <button class="text-sm text-gray-600 hover:text-gray-800" onclick="resetChatHistory()">履歴クリア</button>
+              <button class="text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
+            </div>
           </div>
           <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
-          <div id="chat-typing" class="px-3 pb-2 hidden text-gray-500 text-sm" aria-live="polite">アシスタントが入力中…</div>
+          <!-- 入力中インジケータは非表示に変更（冗長なため） -->
           <div class="border-t border-gray-200 p-2 space-y-2">
             <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
             <div class="flex gap-2">

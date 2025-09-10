@@ -14,6 +14,9 @@
       }
     }
   </script>
+  <!-- Markdown renderer（将来の応答整形用）。QA画面で主に使用。ここでは読み込むだけ。 -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   </style>
@@ -187,6 +190,7 @@
     }
     function setTyping(on){
       const t = document.getElementById('chat-typing');
+      if (!t) return;
       t.classList.toggle('hidden', !on);
     }
     async function sendChat(){
@@ -199,13 +203,17 @@
       const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
       bubble.textContent = '検索中…';
       try{
-        const res = await fetch('/v1/search/llm/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query:q, limit:5})});
-        const reader = res.body.getReader(); const dec = new TextDecoder(); let acc = '';
-        while(true){ const {value, done} = await reader.read(); if (done) break; const chunk = dec.decode(value, {stream:true});
-          for (const part of chunk.split(/\n\n/)){
-            if (!part) continue; if (part.startsWith('data: ')) acc += part.slice(6) + '\n';
-          }
-          bubble.innerHTML = acc.replaceAll('\n','<br/>');
+        const res = await fetch('/v1/search/llm', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({query:q, limit:5})});
+        if (!res.ok) throw new Error('request failed');
+        const data = await res.json();
+        const items = data.items || [];
+        if (!items.length){ bubble.textContent = '関連する作品が見つかりませんでした。'; }
+        else {
+          const lines = items.map(it=>{
+            const subtitle = [it.author, it.era].filter(Boolean).join(' / ');
+            return `・<a href=\"/web/read.html?book_id=${it.id}\">${(it.title||'Untitled')}</a>（${subtitle}）`;
+          });
+          bubble.innerHTML = lines.join('<br/>');
         }
       } catch(e){ bubble.textContent = '検索に失敗しました'; }
       finally { setTyping(false); }
@@ -250,7 +258,7 @@
       <div class="border border-gray-200 rounded-lg sticky" style="top:64px;height: calc(100vh - 64px - 12px);">
         <div class="h-full flex flex-col">
           <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
-          <div id="chat-typing" class="px-3 pb-2 hidden text-gray-500 text-sm" aria-live="polite">アシスタントが入力中…</div>
+          <!-- 入力中インジケータは冗長のため削除 -->
           <div class="border-t border-gray-200 p-2 flex gap-2">
             <input id="chat-input" placeholder="おすすめの本を教えて" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){sendChat()}" />
             <button onclick="sendChat()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
