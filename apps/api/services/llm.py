@@ -8,6 +8,7 @@ PROJECT_ID = os.getenv("PROJECT_ID")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "asia-northeast1")
 
 _client: Optional[Any] = None
+_client_banana: Optional[Any] = None
 
 
 def get_client():
@@ -19,6 +20,15 @@ def get_client():
     return _client
 
 
+def get_client_for_nano_banana():
+    global _client_banana
+    if _client_banana is None:
+        _client_banana = genai.Client(
+            vertexai=True, project=PROJECT_ID, location="global"
+        )
+    return _client_banana
+
+
 def translate_paragraph(book_title: str, paragraph: str) -> tuple[str, int]:
     """
     Translate a paragraph into modern Japanese. Returns (translation, latency_ms).
@@ -26,15 +36,16 @@ def translate_paragraph(book_title: str, paragraph: str) -> tuple[str, int]:
     start = time.time()
     prompt = (
         "あなたは古典作品を現代日本語に訳す編集者です。\n"
-        "- 固有名詞は原則保持し、必要に応じてカナを補助してください。\n"
-        "- 平易で自然な日本語にしてください。\n"
+        "- 高校教育レベルの、平易で自然な日本語にしてください。\n"
         f"作品名: {book_title}\n"
         "--- 段落 ---\n"
         f"{paragraph}\n"
         "--- 出力 ---\n"
-        "現代語訳のみを書いてください。"
+        "現代語訳のみを出力してください。"
     )
-    resp = get_client().models.generate_content(model=LLM_MODEL, contents=[prompt])
+    resp = get_client().models.generate_content(
+        model="gemini-2.5-flash-lite", contents=[prompt]
+    )
     text = (resp.text or "").strip()
     latency_ms = int((time.time() - start) * 1000)
     return text, latency_ms

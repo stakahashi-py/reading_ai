@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS books (
   tags             TEXT[],
   aozora_source_url VARCHAR(1024),
   citation         TEXT,
+  characters       JSONB, -- list of {name, appearance}
   created_at       TIMESTAMP NOT NULL DEFAULT now()
 );
 
@@ -27,6 +28,16 @@ DO $$ BEGIN
     WHERE table_schema = 'public' AND table_name='books' AND column_name='summary'
   ) THEN
     EXECUTE 'ALTER TABLE books ADD COLUMN summary TEXT';
+  END IF;
+END
+$$ LANGUAGE plpgsql;
+
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name='books' AND column_name='characters'
+  ) THEN
+    EXECUTE 'ALTER TABLE books ADD COLUMN characters JSONB';
   END IF;
 END
 $$ LANGUAGE plpgsql;

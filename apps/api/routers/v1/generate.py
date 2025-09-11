@@ -1,17 +1,28 @@
 import os
 import time
 from typing import Optional, Tuple
+from pydantic import BaseModel
+import uuid
+from io import BytesIO
+import json
 
+from PIL import Image
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
+from google.cloud import storage
+from google import genai
+from google.genai import types
+from sqlalchemy import text
 
 from ...security.auth import get_current_user
 from ...db.session import get_db, SessionLocal
 from ...models.models import GenerationJob, Gallery
+from ...services.llm import get_client_for_nano_banana as get_client
 
 router = APIRouter()
 
+client = get_client()
 
 PROJECT_ID = os.getenv("PROJECT_ID")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
@@ -19,6 +30,7 @@ ASSETS_BUCKET = os.getenv("ASSETS_BUCKET")
 ASSETS_URL_PREFIX = os.getenv(
     "ASSETS_URL_PREFIX"
 )  # e.g., https://storage.googleapis.com/<bucket>
+CHARACTER_BUCKET = os.getenv("CHARACTERS_BUCKET")
 VEO_MODEL_ID = os.getenv("VEO_MODEL_ID", "veo-3.0-fast-generate-001")
 
 
@@ -43,76 +55,100 @@ def _auth_headers() -> Tuple[str, dict]:
         return base, {}
 
 
-def _imagen_generate_uri(
-    prompt: str, style: Optional[str], aspect: Optional[str]
-) -> str:
-    """Generate image via Vertex SDK to GCS and return its URI (gs:// or public URL)."""
-    if not ASSETS_BUCKET:
-        raise HTTPException(
-            status_code=500, detail="ASSETS_BUCKET must be set for output_gcs_uri"
-        )
-    import vertexai  # type: ignore
-    from vertexai.preview.vision_models import ImageGenerationModel  # type: ignore
+def _upload_to_gcs(local_path, bucket_name, gcs_path):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(gcs_path)
+    blob.upload_from_filename(local_path)
+    print(f"Uploaded to gs://{bucket_name}/{gcs_path}")
 
-    vertexai.init(project=PROJECT_ID, location=VERTEX_LOCATION)
-    model = ImageGenerationModel.from_pretrained("imagen-4.0-generate-001")
-    final_prompt = prompt if not style else f"{prompt}\n\nスタイル: {style}"
-    kwargs = {
-        "number_of_images": 1,
-        "language": "ja",
-        "person_generation": "allow_all",
-        "output_gcs_uri": f"gs://{ASSETS_BUCKET.rstrip('/')}/imagen",
-    }
-    if aspect:
-        kwargs["aspect_ratio"] = aspect
-    images = model.generate_images(prompt=final_prompt, **kwargs)
-    img0 = images[0]
-    # Try to extract GCS URI from returned object
-    uri = img0._gcs_uri
-    return _to_public_url(uri)
-    # except Exception:
-    #     # Fallback to REST
-    #     base, headers = _auth_headers()
-    #     url = f"{base}/v1/projects/{PROJECT_ID}/locations/{VERTEX_LOCATION}/publishers/google/models/imagen-3.0:generateImages"
-    #     body = {
-    #         "prompt": prompt if not style else f"{prompt}\n\nスタイル: {style}",
-    #         "numberOfImages": 1,
-    #         "outputMimeType": "image/png",
-    #         "size": "1024x1024",
-    #     }
-    #     if aspect:
-    #         body["aspectRatio"] = aspect
-    #     params = {}
-    #     if os.getenv("GOOGLE_API_KEY"):
-    #         params["key"] = os.getenv("GOOGLE_API_KEY")
-    #     with httpx.Client(timeout=60) as client:
-    #         r = client.post(url, headers=headers, params=params, json=body)
-    #         if r.status_code >= 300:
-    #             raise HTTPException(
-    #                 status_code=502, detail=f"Imagen error: {r.text[:200]}"
-    #             )
-    #         data = r.json()
-    #         b64 = None
-    #         if isinstance(data, dict):
-    #             if "images" in data and data["images"]:
-    #                 img0 = data["images"][0]
-    #                 if isinstance(img0, dict):
-    #                     b64 = img0.get("bytesBase64Encoded") or (
-    #                         img0.get("rawImage") or {}
-    #                     ).get("bytesBase64Encoded")
-    #             elif "predictions" in data and data["predictions"]:
-    #                 pred0 = data["predictions"][0]
-    #                 b64 = pred0.get("bytesBase64Encoded")
-    #         if not b64:
-    #             raise HTTPException(
-    #                 status_code=502, detail="Imagen response missing image bytes"
-    #             )
-    #         try:
-    #             return base64.b64decode(b64), "image/png"
-    #         except Exception:
-    #             raise HTTPException(
-    #                 status_code=502, detail="Invalid base64 in Imagen response"
-    #             )
+
+class CharacterNames(BaseModel):
+    names: list[str]
+
+
+def check_characters(title, text, character_names):
+    # Geminiを用いて登場人物を抽出
+    system = (
+        f"「{title}」の一部本文が与えられます。その中に登場する人物を特定し、JSON形式で返してください。\n"
+        "- 「# 登場人物ホワイトリスト」に記載のある名前のみを候補としてください。それ以外の登場人物は出力しないでください。\n"
+        f"# 本文:\n{text}"
+        f"# 登場人物ホワイトリスト:\n{character_names}\n"
+    )
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=system,
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": CharacterNames,
+            "temperature": 0.05,
+        },
+    )
+    return resp.text
+
+
+def _generate_image_and_url(title, content, character_names) -> str:
+    """Generate image via Vertex SDK to GCS and return its URI (gs:// or public URL)."""
+    # プロンプトの入れ物準備
+    contents = [types.Content(role="user", parts=[])]
+
+    # テキストプロンプトの準備
+    prompt_template = """Please generate an illustration of the following scene from the novel 「{title}」
+- {content}
+
+# Notes
+- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a single illustration of it.
+- Do not include any text in the output. character appearance, please follow the provided images.
+{characters}
+- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
+"""
+    characters = "\n".join(
+        [f"  - Image {i}: {name}" for i, name in enumerate(character_names)]
+    )
+    text_prompt = prompt_template.format(
+        title=title, content=content, characters=characters
+    )
+    # 入れ物に突っ込む
+    contents[0].parts.append(types.Part.from_text(text=text_prompt))
+
+    # 画像の準備
+    for character_name in character_names:
+        # Partオブジェクト作成
+        image_part = types.Part.from_uri(
+            file_uri=f"gs://{CHARACTER_BUCKET}/{title}/{character_name}.png",
+            mime_type="image/png",
+        )
+        print(
+            f"gs://{CHARACTER_BUCKET}/{title}/{character_name}.png",
+        )
+        # 入れ物に突っ込んでいく
+        contents[0].parts.append(image_part)
+
+    # 画像生成実行
+    resp = client.models.generate_content(
+        model="gemini-2.5-flash-image-preview",
+        contents=contents,
+        config={"response_modalities": ["TEXT", "IMAGE"]},
+    )
+    retry_count = 0
+    os.makedirs("/tmp", exist_ok=True)
+    local_path = f"/tmp/{uuid.uuid4().hex}.png"
+    while retry_count < 3:
+        for part in resp.candidates[0].content.parts:
+            if part.inline_data is not None:
+                image = Image.open(BytesIO(part.inline_data.data))
+                image.save(local_path)
+                flg = True
+        if flg:
+            break
+        else:
+            retry_count += 1
+            print(f"{retry_count}回目 画像生成に失敗しました。{title}_{content[:10]}")
+
+    # GCSにアップロード
+    _upload_to_gcs(local_path, ASSETS_BUCKET, f"imagen/{os.path.basename(local_path)}")
+    # URIを返す
+    return _to_public_url(f"gs://{ASSETS_BUCKET}/imagen/{os.path.basename(local_path)}")
 
 
 def _veo_generate_and_wait(
@@ -194,8 +230,8 @@ def generate_image(
 ):
     book_id = payload.get("book_id")
     source = payload.get("source")  # selected text or paragraph
-    style = payload.get("style")
-    aspect = payload.get("aspect")
+    # style = payload.get("style")
+    # aspect = payload.get("aspect")
     if not (book_id and source):
         raise HTTPException(status_code=400, detail="book_id and source are required")
     # Record audit
@@ -205,12 +241,36 @@ def generate_image(
         status="running",
         book_id=book_id,
         prompt=source,
-        payload={"style": style, "aspect": aspect},
+        # payload={"style": style, "aspect": aspect},
     )
     db.add(job)
     db.commit()
     db.refresh(job)
-    url = _imagen_generate_uri(source, style, aspect)
+    # タイトルとキャラ一覧取得
+    result = db.execute(
+        text("SELECT title, characters FROM books WHERE id = :bid"),
+        {"bid": book_id},
+    )
+    row = result.mappings().first()
+    title = row["title"]
+    characters_json = row["characters"]
+    character_names = [c["name"] for c in characters_json]
+    # 出現キャラチェック
+    retry_count = 0
+    while retry_count < 3:
+        try:
+            checked_character_names_row = check_characters(
+                title, source, character_names
+            )
+            checked_character_names = (
+                json.loads(checked_character_names_row).get("names") or []
+            )
+            break
+        except Exception as e:
+            print(f"登場人物の抽出に失敗しました: {e}")
+            retry_count += 1
+            checked_character_names = []
+    url = _generate_image_and_url(title, source, checked_character_names)
     job.status = "succeeded"
     job.result = {"asset_url": url}
     db.add(job)
@@ -218,8 +278,15 @@ def generate_image(
     # ギャラリーへ保存
     try:
         paragraph_ids = payload.get("paragraph_ids")
-        meta = {"style": style, "aspect": aspect, "paragraph_ids": paragraph_ids}
-        g = Gallery(user_id=user["uid"], book_id=book_id, asset_url=url, type="image", prompt=source, meta=meta)
+        meta = {"paragraph_ids": paragraph_ids}
+        g = Gallery(
+            user_id=user["uid"],
+            book_id=book_id,
+            asset_url=url,
+            type="image",
+            prompt=source,
+            meta=meta,
+        )
         db.add(g)
         db.commit()
         gid = g.id
@@ -280,7 +347,14 @@ def generate_video(
         meta = {"style": style, "aspect": aspect, "paragraph_ids": paragraph_ids}
         gid = None
         if primary:
-            g = Gallery(user_id=user["uid"], book_id=book_id, asset_url=primary, type="video", prompt=source, meta=meta)
+            g = Gallery(
+                user_id=user["uid"],
+                book_id=book_id,
+                asset_url=primary,
+                type="video",
+                prompt=source,
+                meta=meta,
+            )
             db.add(g)
             db.commit()
             gid = g.id
