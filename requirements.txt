@@ -13,3 +13,4 @@ google-genai>=0.3.0
 beautifulsoup4>=4.12.3
 google-cloud-storage>=2.18.2
 google-cloud-aiplatform>=1.66.0
+Pillow==11.3.0
