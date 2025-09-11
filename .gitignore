@@ -9,3 +9,4 @@
 .DS_Store
 /experiment/02_generate_characters_image/pictures/*/*/*.png
 /experiment/03_generate_image/pictures/*/*.png
+/preprocessing/tmp

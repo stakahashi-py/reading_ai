@@ -67,7 +67,7 @@ def main():
             character = char["name"]
             appearance = "、".join(char["appearance"])
             # filenameのファイルが存在したらcontinue
-            filename = f"preprocessing/tmp/{title}/{character}.png"
+            filename = f"preprocessing/tmp/{title}/{character.replace('/', '')}.png"
             if Path(filename).exists():
                 print(
                     f"Image already exists for {title} - {character} ({appearance}), skipping."
