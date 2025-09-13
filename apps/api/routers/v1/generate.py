@@ -5,6 +5,8 @@ from pydantic import BaseModel
 import uuid
 from io import BytesIO
 import json
+import shutil
+import base64
 
 from PIL import Image
 import httpx
@@ -32,6 +34,8 @@ ASSETS_URL_PREFIX = os.getenv(
 )  # e.g., https://storage.googleapis.com/<bucket>
 CHARACTER_BUCKET = os.getenv("CHARACTERS_BUCKET")
 VEO_MODEL_ID = os.getenv("VEO_MODEL_ID", "veo-3.0-fast-generate-001")
+
+os.makedirs("/tmp", exist_ok=True)
 
 
 def _auth_headers() -> Tuple[str, dict]:
@@ -67,7 +71,7 @@ class CharacterNames(BaseModel):
     names: list[str]
 
 
-def check_characters(title, text, character_names):
+def _check_characters(title, text, character_names):
     # Geminiを用いて登場人物を抽出
     system = (
         f"「{title}」の一部本文が与えられます。その中に登場する人物を特定し、JSON形式で返してください。\n"
@@ -75,33 +79,35 @@ def check_characters(title, text, character_names):
         f"# 本文:\n{text}"
         f"# 登場人物ホワイトリスト:\n{character_names}\n"
     )
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=system,
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": CharacterNames,
-            "temperature": 0.05,
-        },
-    )
-    return resp.text
+    retry_count = 0
+    while retry_count < 3:
+        try:
+            resp = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=system,
+                config={
+                    "response_mime_type": "application/json",
+                    "response_schema": CharacterNames,
+                    "temperature": 0.05,
+                },
+            )
+            checked_character_names = json.loads(resp.text).get("names")
+            break
+        except Exception as e:
+            print(f"登場人物の抽出に失敗しました: {e}")
+            retry_count += 1
+            checked_character_names = []
+    return checked_character_names
 
 
-def _generate_image_and_url(title, content, character_names) -> str:
-    """Generate image via Vertex SDK to GCS and return its URI (gs:// or public URL)."""
+def _generate_image_nano_banana(
+    title, content, character_names, prompt_template, need_text: Optional[bool] = False
+) -> str:
+    """Generate image via Nano Banana"""
     # プロンプトの入れ物準備
     contents = [types.Content(role="user", parts=[])]
 
     # テキストプロンプトの準備
-    prompt_template = """Please generate an illustration of the following scene from the novel 「{title}」
-- {content}
-
-# Notes
-- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a single illustration of it.
-- Do not include any text in the output. character appearance, please follow the provided images.
-{characters}
-- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
-"""
     characters = "\n".join(
         [f"  - Image {i}: {name}" for i, name in enumerate(character_names)]
     )
@@ -124,47 +130,67 @@ def _generate_image_and_url(title, content, character_names) -> str:
         # 入れ物に突っ込んでいく
         contents[0].parts.append(image_part)
 
-    # 画像生成実行
-    resp = client.models.generate_content(
-        model="gemini-2.5-flash-image-preview",
-        contents=contents,
-        config={"response_modalities": ["TEXT", "IMAGE"]},
-    )
     retry_count = 0
-    os.makedirs("/tmp", exist_ok=True)
     local_path = f"/tmp/{uuid.uuid4().hex}.png"
+    img_flg = False
+    text_flg = False
     while retry_count < 3:
+        # 画像生成実行
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash-image-preview",
+            contents=contents,
+            config={"temperature": 0.5, "response_modalities": ["TEXT", "IMAGE"]},
+        )
+        return_text = ""
         for part in resp.candidates[0].content.parts:
+            if part.text is not None:
+                return_text += part.text
+                text_flg = True
             if part.inline_data is not None:
                 image = Image.open(BytesIO(part.inline_data.data))
                 image.save(local_path)
-                flg = True
-        if flg:
-            break
+                img_flg = True
+
+        if need_text:
+            if img_flg and text_flg:
+                break
         else:
-            retry_count += 1
-            print(f"{retry_count}回目 画像生成に失敗しました。{title}_{content[:10]}")
+            if img_flg:
+                break
 
-    # GCSにアップロード
-    _upload_to_gcs(local_path, ASSETS_BUCKET, f"imagen/{os.path.basename(local_path)}")
-    # URIを返す
-    return _to_public_url(f"gs://{ASSETS_BUCKET}/imagen/{os.path.basename(local_path)}")
+        retry_count += 1
+        print(
+            f"{retry_count}回目 画像orテキスト生成に失敗しました。{title}_{content[:10]}"
+        )
+    if need_text:
+        if not (img_flg and text_flg):
+            raise HTTPException(
+                status_code=500, detail="画像またはテキスト生成に失敗しました"
+            )
+    else:
+        if not img_flg:
+            raise HTTPException(status_code=500, detail="画像生成に失敗しました")
+    return local_path, return_text
 
 
-def _veo_generate_and_wait(
-    prompt: str, style: Optional[str], aspect: Optional[str], timeout_s: int = 180
-) -> dict:
+def _veo_generate_and_wait(img_path: str, prompt: str, timeout_s: int = 180) -> dict:
     base, headers = _auth_headers()
+    # 1シーン目の画像読み込み
+    with open(img_path, "rb") as f:
+        encoded_str = base64.b64encode(f.read()).decode("utf-8")
+    mime_type = "image/png"
+    # 動画の生成
     gen_url = f"{base}/v1/projects/{PROJECT_ID}/locations/{VERTEX_LOCATION}/publishers/google/models/{VEO_MODEL_ID}:predictLongRunning"
     body = {
         "instances": [
             {
-                "prompt": prompt if not style else f"{prompt}\n\nスタイル: {style}",
+                "prompt": prompt,
+                "image": {"bytesBase64Encoded": encoded_str, "mimeType": mime_type},
             }
         ],
         "parameters": {
             "durationSeconds": 8,
-            "aspectRatio": aspect if aspect else "16:9",
+            "aspectRatio": "16:9",
             "resolution": "720p",
             "personGeneration": "allow_all",
             "sampleCount": 1,
@@ -201,6 +227,11 @@ def _veo_generate_and_wait(
                 )
             od = rr.json()
             if od.get("done"):
+                if od.get("error") and od.get("error").get("code") == 3:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"動画生成に失敗しました: {od.get('error').get('message')}",
+                    )
                 return od
             time.sleep(2)
         raise HTTPException(status_code=504, detail="Veo polling timeout")
@@ -234,18 +265,6 @@ def generate_image(
     # aspect = payload.get("aspect")
     if not (book_id and source):
         raise HTTPException(status_code=400, detail="book_id and source are required")
-    # Record audit
-    job = GenerationJob(
-        user_id=user["uid"],
-        job_type="image",
-        status="running",
-        book_id=book_id,
-        prompt=source,
-        # payload={"style": style, "aspect": aspect},
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
     # タイトルとキャラ一覧取得
     result = db.execute(
         text("SELECT title, characters FROM books WHERE id = :bid"),
@@ -256,25 +275,25 @@ def generate_image(
     characters_json = row["characters"]
     character_names = [c["name"] for c in characters_json]
     # 出現キャラチェック
-    retry_count = 0
-    while retry_count < 3:
-        try:
-            checked_character_names_row = check_characters(
-                title, source, character_names
-            )
-            checked_character_names = (
-                json.loads(checked_character_names_row).get("names") or []
-            )
-            break
-        except Exception as e:
-            print(f"登場人物の抽出に失敗しました: {e}")
-            retry_count += 1
-            checked_character_names = []
-    url = _generate_image_and_url(title, source, checked_character_names)
-    job.status = "succeeded"
-    job.result = {"asset_url": url}
-    db.add(job)
-    db.commit()
+    checked_character_names = _check_characters(title, source, character_names)
+    prompt_template = """Please generate an illustration of the following scene from the novel 「{title}」
+- {content}
+
+# Notes
+- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a single illustration of it.
+- Do not include any text in the output. character appearance, please follow the provided images.
+{characters}
+- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
+"""
+    img_path, _ = _generate_image_nano_banana(
+        title, source, checked_character_names, prompt_template
+    )
+    # GCSにアップロード
+    _upload_to_gcs(img_path, ASSETS_BUCKET, f"imagen/{os.path.basename(img_path)}")
+    # URIを返す
+    url = _to_public_url(f"gs://{ASSETS_BUCKET}/imagen/{os.path.basename(img_path)}")
+    # img_pathの削除
+    shutil.rmtree(img_path, ignore_errors=True)
     # ギャラリーへ保存
     try:
         paragraph_ids = payload.get("paragraph_ids")
@@ -305,18 +324,46 @@ def generate_video(
     aspect = payload.get("aspect")
     if not (book_id and source):
         raise HTTPException(status_code=400, detail="book_id and source are required")
-    job = GenerationJob(
-        user_id=user["uid"],
-        job_type="video",
-        status="running",
-        book_id=book_id,
-        prompt=source,
-        payload={"style": style, "aspect": aspect},
+
+    # タイトルとキャラ一覧取得
+    result = db.execute(
+        text("SELECT title, characters FROM books WHERE id = :bid"),
+        {"bid": book_id},
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    result = _veo_generate_and_wait(source, style, aspect)
+    row = result.mappings().first()
+    title = row["title"]
+    characters_json = row["characters"]
+    character_names = [c["name"] for c in characters_json]
+    # 出現キャラチェック
+    checked_character_names = _check_characters(title, source, character_names)
+    prompt_template = """Generate a prompt for creating a video of the following scene, and also generate an image for the beginning of the video.
+title: {title}
+scene: {content}
+
+# Notes
+- Only output the prompt and an image for the beginning of the video, do not output any other text.
+- Output the prompt in English.
+- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a simple and concise prompt.
+- Do not include any text in the image. Character appearance, please follow the provided images.
+{characters}
+- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
+- Describe human subjects using age-neutral terms like 'person' or 'figure' to avoid contents filtering issues.
+"""
+    retry_count = 0
+    while retry_count < 3:
+        try:
+            img_path, veo_prompt = _generate_image_nano_banana(
+                title, source, checked_character_names, prompt_template, need_text=True
+            )
+            print(img_path, veo_prompt.strip())
+            result = _veo_generate_and_wait(
+                img_path,
+                veo_prompt.strip().replace("boy", "person").replace("girl", "person"),
+            )
+            break
+        except Exception as e:
+            print(f"動画生成に失敗しました: {e}")
+            retry_count += 1
     # extract uris robustly
     uris: list[str] = []
     if isinstance(result, dict):
@@ -337,10 +384,6 @@ def generate_video(
                     uris = [u for u in ulist if isinstance(u, str)]
     public = [_to_public_url(u) for u in uris]
     primary = public[0] if public else None
-    job.status = "succeeded"
-    job.result = {"video_uris": public, "raw": result}
-    db.add(job)
-    db.commit()
     # ギャラリーへ保存
     try:
         paragraph_ids = payload.get("paragraph_ids")
