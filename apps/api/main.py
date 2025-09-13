@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from .db.session import engine
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,11 @@ app.include_router(v1.router, prefix="/v1")
 
 # Serve static web (simple MVP)
 app.mount("/web", StaticFiles(directory="web", html=True), name="web")
+
+# Redirect root to search page
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/web/search.html")
 
 
 @app.get("/healthz/db")
