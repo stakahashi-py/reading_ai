@@ -3,8 +3,6 @@ uvicorn[standard]==0.30.6
 sqlalchemy==2.0.34
 psycopg[binary]
 pg8000==1.31.2
-google-cloud-sql-connector>=1.13.0
-alembic==1.13.2
 pydantic==2.9.1
 firebase-admin==6.5.0
 python-dotenv==1.0.1
