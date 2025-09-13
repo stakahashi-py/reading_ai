@@ -13,6 +13,8 @@ CONNECTION_NAME = os.getenv("CONNECTION_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_NAME = os.getenv("DB_NAME")
 DB_PASS = os.getenv("DB_PASS")
+ENABLE_IAM_AUTH = os.getenv("ENABLE_IAM_AUTH", "false").lower() == "true"
+CLOUD_SQL_IP_TYPE = (os.getenv("CLOUD_SQL_IP_TYPE", "PUBLIC") or "PUBLIC").upper()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -24,15 +26,17 @@ def _create_engine():
             from google.cloud.sql.connector import Connector, IPTypes  # lazy import
 
             connector = Connector()
-            return connector.connect(
-                CONNECTION_NAME,
-                "pg8000",
-                user=DB_USER,
-                db=DB_NAME,
-                password=DB_PASS,
-                enable_iam_auth=True,
-                ip_type=IPTypes.PUBLIC,
-            )
+            kwargs = {
+                "driver": "pg8000",
+                "user": DB_USER,
+                "db": DB_NAME,
+                "enable_iam_auth": ENABLE_IAM_AUTH,
+                "ip_type": IPTypes.PRIVATE if CLOUD_SQL_IP_TYPE == "PRIVATE" else IPTypes.PUBLIC,
+            }
+            # Use password only when IAM auth is disabled
+            if not ENABLE_IAM_AUTH and DB_PASS:
+                kwargs["password"] = DB_PASS
+            return connector.connect(CONNECTION_NAME, **kwargs)
 
         return create_engine(
             "postgresql+pg8000://",

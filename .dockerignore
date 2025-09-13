@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+.git
+.gitignore
+tests
+*.ipynb
+preprocessing/aozora_html
+preprocessing/out_csv
+preprocessing/*.csv
+preprocessing/*.tsv
+*.log
+.DS_Store
+
