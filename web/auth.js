@@ -39,18 +39,47 @@
     if (!firebase.apps.length) firebase.initializeApp(cfg);
     const auth = firebase.auth();
 
-    // Ensure a user session (anonymous by default)
-    try {
-      await new Promise((resolve) => {
-        const unsub = auth.onAuthStateChanged(async (u) => {
-          unsub();
-          if (!u) {
-            try { await auth.signInAnonymously(); } catch(_) {}
-          }
-          resolve();
-        });
+    // Auth mode: 'auto' (default) | 'anonymous' | 'google'
+    // - auto: try anonymous; if disallowed, fallback to Google redirect
+    const elCfg = document.getElementById('firebase-config');
+    const dataAttrMode = elCfg && elCfg.getAttribute('data-auth-mode');
+    const MODE = (window.AUTH_MODE || dataAttrMode || 'auto').toLowerCase();
+
+    const ensureSignedIn = async () => {
+      const current = auth.currentUser || await new Promise((resolve) => {
+        const off = auth.onAuthStateChanged((u) => { off(); resolve(u); });
       });
-    } catch(_) {}
+      if (current) return current;
+
+      const loginWithGoogle = async () => {
+        try {
+          const provider = new firebase.auth.GoogleAuthProvider();
+          await auth.signInWithRedirect(provider);
+        } catch (e) {
+          console.error('[auth] Google sign-in redirect failed:', e);
+        }
+        return null;
+      };
+
+      if (MODE === 'google') {
+        return await loginWithGoogle();
+      }
+
+      // anonymous or auto
+      try {
+        await auth.signInAnonymously();
+        return auth.currentUser;
+      } catch (e) {
+        // Anonymous disabled → fallback to Google on auto
+        if (MODE === 'auto' && (e && (e.code === 'auth/operation-not-allowed' || e.code === 'auth/admin-restricted-operation'))) {
+          return await loginWithGoogle();
+        }
+        console.warn('[auth] Anonymous sign-in failed:', e);
+        return null;
+      }
+    };
+
+    await ensureSignedIn();
 
     // Expose a promise for readiness
     window.firebaseReady = (async () => {
@@ -89,4 +118,3 @@
     init();
   }
 })();
-
