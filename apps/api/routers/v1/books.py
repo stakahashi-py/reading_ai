@@ -95,12 +95,4 @@ def get_paragraphs(
         return {"book_id": book_id, "offset": offset, "limit": limit, "total": 0, "items": [], "error": str(e)}
 
 
-@router.get("/filters")
-def get_filters(db: Session = Depends(get_db)):
-    # Distinct eras
-    eras_rows = db.execute(text("SELECT DISTINCT era FROM books WHERE era IS NOT NULL ORDER BY era ASC")).fetchall()
-    eras = [r[0] for r in eras_rows if r[0]]
-    # Distinct tags via unnest
-    tags_rows = db.execute(text("SELECT DISTINCT unnest(tags) AS tag FROM books WHERE tags IS NOT NULL ORDER BY tag ASC")).fetchall()
-    tags = [r[0] for r in tags_rows if r[0]]
-    return {"eras": eras, "tags": tags}
+ 
