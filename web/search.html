@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>検索</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/web/styles.css" />
   <script>
     tailwind.config = {
       theme: {
@@ -100,16 +101,16 @@
         const st = statusFromProgress(prog);
         el.className = 'border border-gray-200 rounded-lg p-3 mt-3';
         el.innerHTML = `
-          <div class="flex items-start justify-between gap-2">
+          <div class="md:flex items-start justify-between gap-3">
             <div>
               <div class="font-semibold">${it.title || 'Untitled'}</div>
               <div class="text-gray-500 text-sm">${subtitle}</div>
               ${it.snippet ? `<div class="mt-2">${it.snippet.replaceAll('\n', ' ')}</div>` : ''}
             </div>
-            <div class="text-right min-w-[140px]">
+            <div class="mt-3 md:mt-0 md:text-right md:min-w-[140px]">
               ${typeof it.score === 'number' ? `<div class="text-gray-400 text-xs">score: ${it.score.toFixed(3)}</div>` : ''}
               <div class="mt-1 text-xs"><span class="inline-block px-2 py-0.5 rounded bg-accent/20 text-sky-700">${st.label}${st.label === '読書中' ? ` ${Math.round(st.percent)}%` : ''}</span></div>
-              <div class="mt-2 flex gap-2 justify-end">
+              <div class="mt-2 flex gap-2 md:justify-end">
                 ${st.label === '読了' ? `<button class=\"px-3 py-1 rounded border border-gray-300 text-sm\" onclick=\"openReviewModal(${it.id})\">感想表示</button>` : ''}
                 <a class="inline-block px-3 py-1 rounded bg-sky-500 text-white text-sm" href="/web/read.html?book_id=${it.id}">読む</a>
               </div>
@@ -168,7 +169,7 @@
       const wrap = document.createElement('div');
       wrap.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'} my-2`;
       const bubble = document.createElement('div');
-      bubble.className = `max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role === 'user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
+      bubble.className = `max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role === 'user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
       bubble.innerHTML = html;
       wrap.appendChild(bubble);
       box.appendChild(wrap);
@@ -187,7 +188,7 @@
       const wrap = document.createElement('div');
       wrap.className = 'flex justify-start my-2';
       const col = document.createElement('div');
-      col.className = 'max-w-[80%] flex flex-col gap-2';
+      col.className = 'max-w-[92%] sm:max-w-[80%] flex flex-col gap-2';
       wrap.appendChild(col);
       box.appendChild(wrap);
       box.scrollTop = box.scrollHeight;
@@ -510,6 +511,29 @@
     }
 
     window.addEventListener('DOMContentLoaded', async () => {
+      // モバイルではチャットを検索フォーム直下へ移動
+      function relocateChatForSearch(){
+        const chatCol = document.getElementById('chat-col');
+        const chatPanel = document.getElementById('chat-panel');
+        const grid = document.getElementById('grid-root');
+        const mobileAnchor = document.getElementById('chat-mobile-anchor');
+        const isLg = window.matchMedia('(min-width: 1024px)').matches;
+        if (!chatCol || !chatPanel || !grid || !mobileAnchor) return;
+        if (isLg){
+          // デスクトップ：元の位置（グリッド直下の右カラム）へ戻す＋sticky高さ
+          if (chatCol.parentElement !== grid) grid.appendChild(chatCol);
+          chatPanel.classList.add('sticky','h-chat');
+          chatPanel.style.top = '64px';
+        } else {
+          // モバイル：検索フォーム直下へ移動、sticky解除して高さは自動
+          if (chatCol.parentElement !== mobileAnchor) mobileAnchor.after(chatCol);
+          chatPanel.classList.remove('sticky','h-chat');
+          chatPanel.style.top = '';
+        }
+      }
+      relocateChatForSearch();
+      window.matchMedia('(min-width: 1024px)').addEventListener('change', relocateChatForSearch);
+
       await loadFilters();
       const q = qs('q') || '' || qs('author') || qs('era');
       restoreFromQS();
@@ -528,30 +552,33 @@
   <header class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
     <strong class="text-2xl">MAsterpIece</strong> - 名作を、もっと気軽に、面白く。 -
   </header>
-  <div class="p-4 grid grid-cols-10 gap-4">
+  <main class="container mx-auto">
+  <div id="grid-root" class="p-4 grid grid-cols-10 gap-4">
     <!-- 左：通常検索（6） -->
-    <div class="col-span-10 lg:col-span-6">
-      <div class="flex flex-wrap gap-2">
-        <input id="q" placeholder="タイトル（完全一致/部分一致）"
-          class="flex-1 min-w-[220px] border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
-        <input id="author" placeholder="作者（部分一致）" class="w-[200px] border border-gray-300 rounded px-3 py-2"
+    <div id="left-col-search" class="col-span-10 lg:col-span-6">
+      <div class="flex flex-wrap gap-x-2 gap-y-2" role="search" aria-label="本の検索">
+        <input id="q" aria-label="タイトル" placeholder="タイトル（完全一致/部分一致）"
+          class="w-full sm:flex-1 min-w-0 border border-gray-300 rounded px-3 py-2" onkeydown="onKey(event)" />
+        <input id="author" aria-label="作者" placeholder="作者（部分一致）" class="w-full sm:w-48 border border-gray-300 rounded px-3 py-2"
           onkeydown="onKey(event)" />
-        <select id="era" class="w-[140px] border border-gray-300 rounded px-3 py-2">
+        <select id="era" aria-label="時代" class="w-full sm:w-36 border border-gray-300 rounded px-3 py-2">
           <option value="">時代</option>
         </select>
-        <button onclick="search()" class="bg-sky-500 text-white rounded px-4 py-2">検索</button>
+        <button onclick="search()" class="w-full sm:w-auto bg-sky-500 text-white rounded px-4 py-2">検索</button>
       </div>
+      <!-- モバイル時：チャットをこの位置に差し込む -->
+      <div id="chat-mobile-anchor" class="block lg:hidden mt-3"></div>
       <div id="results" class="mt-4 text-gray-600">条件を入力して検索してください。</div>
       <div id="more" class="my-4"></div>
     </div>
 
     <!-- 右：チャット（4） -->
     <div class="col-span-10 lg:col-span-4" id="chat-col">
-      <div class="border border-gray-200 rounded-lg sticky" style="top:64px;height: calc(100vh - 64px - 12px);">
+      <div id="chat-panel" class="border border-gray-200 rounded-lg sticky h-chat" style="top:64px;">
         <div class="h-full flex flex-col">
           <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
           <!-- 入力中インジケータは冗長のため削除 -->
-          <div class="border-t border-gray-200 p-2 flex gap-2">
+          <div class="border-t border-gray-200 p-2 pb-safe flex gap-2">
             <input id="chat-input" placeholder="おすすめの本を教えて" class="flex-1 border border-gray-300 rounded px-3 py-2"
               onkeydown="if(event.key==='Enter'){sendChat()}" />
             <button onclick="sendChat()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
@@ -562,7 +589,7 @@
   </div>
 
   <dialog id="review-modal" class="rounded max-w-xl w-[90vw]">
-    <div class="p-4 space-y-3">
+    <div class="p-4 space-y-3 modal-body-limit">
       <div class="text-lg font-semibold">感想</div>
       <textarea id="review-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力"></textarea>
       <div class="flex justify-end gap-2">
@@ -571,6 +598,7 @@
       </div>
     </div>
   </dialog>
+  </main>
 </body>
 
 </html>

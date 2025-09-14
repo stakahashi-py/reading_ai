@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>読む</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/web/styles.css" />
   <script>
     tailwind.config = {
       theme: { extend: { colors: { accent: '#93c5fd' } } }
@@ -161,7 +162,7 @@
       setTyping(true);
       const box = document.getElementById('chat-log');
       const wrap = document.createElement('div'); wrap.className = 'flex justify-start my-2';
-      const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
+      const bubble = document.createElement('div'); bubble.className = 'max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
       bubble.textContent = '回答を生成中…';
       try {
         // 送信時に選択解除：まず文脈を確定→UIからは即時解除
@@ -354,7 +355,7 @@
       const wrap = document.createElement('div');
       wrap.className = `flex ${role==='user' ? 'justify-end' : 'justify-start'} my-2`;
       const bubble = document.createElement('div');
-      bubble.className = `max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role==='user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
+      bubble.className = `max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role==='user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
       bubble.innerHTML = html;
       wrap.appendChild(bubble);
       box.appendChild(wrap);
@@ -401,19 +402,20 @@
     </div>
     <button id="chat-toggle-header" class="text-sm text-sky-700" onclick="toggleChat()">チャットを隠す</button>
   </header>
+  <main class="container mx-auto">
   <div class="p-4 grid grid-cols-10 gap-4">
     <!-- 本文（6） -->
     <div id="left-col" class="col-span-10 lg:col-span-6 pb-24">
       <div id="paras">読み込み中…</div>
       <!-- 左カラム内・下部固定（sticky）アクションバー -->
-      <div class="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur z-10 mt-4 py-2">
-        <div class="flex items-center gap-2">
-          <button id="btn-hl" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="saveHighlight()" disabled>ハイライトする</button>
-          <button id="btn-trans" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="doTranslate()" disabled>ここだけ翻訳</button>
-          <button id="btn-img" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="generateImage()" disabled>挿絵を生成</button>
-          <button id="btn-vid" class="px-3 py-2 border border-gray-300 rounded disabled:opacity-40" onclick="generateVideo()" disabled>動く挿絵を生成</button>
-          <div class="ml-auto">
-            <button id="btn-jump" class="px-3 py-2 border border-gray-300 rounded" onclick="openJumpModal()">ハイライトに移動</button>
+      <div class="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur z-10 mt-4 py-2 pb-safe">
+        <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2">
+          <button id="btn-hl" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="saveHighlight()" disabled>ハイライトする</button>
+          <button id="btn-trans" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="doTranslate()" disabled>ここだけ翻訳</button>
+          <button id="btn-img" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="generateImage()" disabled>挿絵を生成</button>
+          <button id="btn-vid" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="generateVideo()" disabled>動く挿絵を生成</button>
+          <div class="sm:ml-auto col-span-2 sm:col-span-auto justify-self-end">
+            <button id="btn-jump" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded" onclick="openJumpModal()">ハイライトに移動</button>
           </div>
         </div>
       </div>
@@ -424,8 +426,8 @@
     </div>
 
     <!-- チャット（4） -->
-    <div id="chat-col" class="col-span-10 lg:col-span-4">
-      <div class="border border-gray-200 rounded-lg sticky" style="top:64px;height: calc(100vh - 64px - 12px);">
+    <div id="chat-col" class="hidden lg:block col-span-10 lg:col-span-4">
+      <div id="chat-panel" class="border border-gray-200 rounded-lg sticky h-chat" style="top:64px;">
         <div class="h-full flex flex-col">
           <div class="p-2 border-b border-gray-200 flex justify-between items-center">
             <div class="text-sm text-gray-600">チャット</div>
@@ -436,7 +438,7 @@
           </div>
           <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
           <!-- 入力中インジケータは非表示に変更（冗長なため） -->
-          <div class="border-t border-gray-200 p-2 space-y-2">
+          <div class="border-t border-gray-200 p-2 pb-safe space-y-2">
             <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
             <div class="flex gap-2">
               <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){doQA()}" />
@@ -448,18 +450,19 @@
       
     </div>
   </div>
+  </main>
 
   <!-- 固定バー（全体幅）は削除し左カラム内stickyへ移設 -->
 
   <dialog id="jump-modal" class="rounded max-w-xl w-[90vw]">
-    <div class="p-4">
+    <div class="p-4 modal-body-limit">
       <div class="text-lg font-semibold mb-2">ハイライト一覧</div>
       <div id="jump-list" class="max-h-[60vh] overflow-auto"></div>
       <div class="text-right mt-3"><button class="px-3 py-1 border rounded" onclick="document.getElementById('jump-modal').close()">閉じる</button></div>
     </div>
   </dialog>
   <dialog id="complete-modal" class="rounded max-w-xl w-[90vw]">
-    <div class="p-4 space-y-3">
+    <div class="p-4 space-y-3 modal-body-limit">
       <div class="text-lg font-semibold">お疲れ様でした！感想を書いてみませんか？</div>
       <textarea id="complete-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力（任意）"></textarea>
       <div class="flex justify-end gap-2">
@@ -468,23 +471,53 @@
       </div>
     </div>
   </dialog>
+  <!-- モバイル用：全画面チャットオーバーレイ -->
+  <dialog id="chat-overlay" class="w-[100vw] h-[100dvh] p-0">
+    <div class="h-[100dvh] flex flex-col">
+      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <div class="text-sm text-gray-600">チャット</div>
+        <button class="text-sm text-sky-700" onclick="closeChatOverlay()">閉じる</button>
+      </div>
+      <div id="chat-overlay-body" class="flex-1 overflow-hidden"></div>
+    </div>
+  </dialog>
   <script>
+    function isLg(){ return window.matchMedia('(min-width: 1024px)').matches; }
     function toggleChat(){
+      if (!isLg()) { openChatOverlay(); return; }
       const chat = document.getElementById('chat-col');
       const left = document.getElementById('left-col');
       const headerBtn = document.getElementById('chat-toggle-header');
-      if (!chat.classList.contains('hidden')){
-        chat.classList.add('hidden');
-        left.classList.remove('lg:col-span-6');
-        left.classList.add('lg:col-span-10');
-        if (headerBtn) headerBtn.textContent = 'チャットを表示';
-      } else {
-        chat.classList.remove('hidden');
-        left.classList.remove('lg:col-span-10');
-        left.classList.add('lg:col-span-6');
-        if (headerBtn) headerBtn.textContent = 'チャットを隠す';
-      }
+      const hidden = chat.classList.contains('hidden');
+      if (hidden){ chat.classList.remove('hidden'); left.classList.remove('lg:col-span-10'); left.classList.add('lg:col-span-6'); if (headerBtn) headerBtn.textContent = 'チャットを隠す'; }
+      else { chat.classList.add('hidden'); left.classList.remove('lg:col-span-6'); left.classList.add('lg:col-span-10'); if (headerBtn) headerBtn.textContent = 'チャットを表示'; }
     }
+    function openChatOverlay(){
+      const dlg = document.getElementById('chat-overlay');
+      const body = document.getElementById('chat-overlay-body');
+      const panel = document.getElementById('chat-panel');
+      if (!dlg || !body || !panel) return;
+      panel.classList.remove('sticky','h-chat'); panel.style.top='';
+      body.appendChild(panel);
+      dlg.showModal();
+    }
+    function closeChatOverlay(){
+      const dlg = document.getElementById('chat-overlay');
+      const body = document.getElementById('chat-overlay-body');
+      const panel = document.getElementById('chat-panel');
+      const chatCol = document.getElementById('chat-col');
+      if (!dlg || !body || !panel || !chatCol) return;
+      chatCol.appendChild(panel);
+      if (isLg()){ panel.classList.add('sticky','h-chat'); panel.style.top='64px'; }
+      dlg.close();
+    }
+    // 画面幅の変化でヘッダーボタン文言とパネルの状態を調整
+    (function(){
+      const headerBtn = document.getElementById('chat-toggle-header');
+      const mql = window.matchMedia('(min-width: 1024px)');
+      const apply = ()=>{ if (headerBtn) headerBtn.textContent = mql.matches ? 'チャットを隠す' : 'チャットを開く'; };
+      apply(); mql.addEventListener('change', apply);
+    })();
     function openCompleteModal(){
       const dlg = document.getElementById('complete-modal');
       const ta = document.getElementById('complete-text'); ta.value='';
