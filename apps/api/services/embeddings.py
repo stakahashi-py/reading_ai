@@ -22,7 +22,9 @@ def get_client():
 def embed_text(text: str) -> Optional[List[float]]:
     """Return embedding vector for text, or None on failure."""
     try:
-        resp = get_client().models.embed_content(model=EMBED_MODEL, contents=[text])
+        resp = get_client().models.embed_content(
+            model=EMBED_MODEL, contents=[text], config={"output_dimensionality": 768}
+        )
         # google-genai returns .embeddings[0].values or .data depending on version; try common fields
         if hasattr(resp, "embeddings") and resp.embeddings:
             vec = resp.embeddings[0].values
