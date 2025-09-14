@@ -1,0 +1,23 @@
+/* 共通ユーティリティ（レスポンシブ/安全域/高さ） */
+
+/* 100dvh対応（iOS等でのvhズレ対策） */
+.h-chat {
+  height: calc(100vh - 64px - 12px);
+}
+@supports (height: 100dvh) {
+  .h-chat {
+    height: calc(100dvh - 64px - 12px);
+  }
+}
+
+/* iOSセーフエリアの下マージン（チャット入力など） */
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+}
+
+/* モーダルの最大高さ（小画面ではスクロール） */
+.modal-body-limit {
+  max-height: 80dvh;
+  overflow: auto;
+}
+
