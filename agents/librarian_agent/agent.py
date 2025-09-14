@@ -109,7 +109,7 @@ def vector_search_paragraphs(query: str, top_k: int = 10) -> dict:
     query_embedding = query_embedding.astype(float).tolist()
 
     sql = f"""
-    SELECT books.title, books.book_id, paragraphs.text, paragraphs.embed <=> :qvec AS score
+    SELECT books.title, paragraphs.book_id, paragraphs.text, paragraphs.embed <=> :qvec AS score
     FROM paragraphs
     JOIN books ON paragraphs.book_id = books.id
     ORDER BY score
