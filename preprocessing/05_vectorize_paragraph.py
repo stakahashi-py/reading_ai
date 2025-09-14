@@ -17,6 +17,8 @@ import sys
 import time
 from typing import List, Tuple
 import time
+import numpy as np
+from numpy.linalg import norm
 
 import dotenv
 
@@ -25,9 +27,9 @@ from google import genai  # type: ignore
 from google.cloud.sql.connector import Connector, IPTypes  # type: ignore
 
 
-MODEL = "text-embedding-004"  # 768 dims
+MODEL = "gemini-embedding-001"
 FETCH_SIZE = 1000
-EMBED_BATCH = 128
+EMBED_BATCH = 250
 
 
 def load_env():
@@ -40,7 +42,10 @@ def make_db_conn():
     db_name = os.getenv("DB_NAME")
     db_pass = os.getenv("DB_PASS")
     if not (conn_name and db_user and db_name):
-        print("Set CONNECTION_NAME, DB_USER, DB_NAME (and DB_PASS if needed)", file=sys.stderr)
+        print(
+            "Set CONNECTION_NAME, DB_USER, DB_NAME (and DB_PASS if needed)",
+            file=sys.stderr,
+        )
         sys.exit(2)
     connector = Connector()
     conn = connector.connect(
@@ -64,39 +69,32 @@ def make_embed_client():
     elif api_key:
         return genai.Client(api_key=api_key)
     else:
-        print("Set PROJECT_ID (+VERTEX_LOCATION) or GOOGLE_API_KEY for embeddings.", file=sys.stderr)
+        print(
+            "Set PROJECT_ID (+VERTEX_LOCATION) or GOOGLE_API_KEY for embeddings.",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
 
 def embed_batch(client, texts: List[str]) -> List[List[float]]:
-    resp = client.models.embed_content(model=MODEL, contents=texts)
+    resp = client.models.embed_content(
+        model=MODEL, contents=texts, config={"output_dimensionality": 768}
+    )
     if hasattr(resp, "embeddings"):
         out: List[List[float]] = []
         for e in resp.embeddings:
-            v = getattr(e, "values", None) or getattr(e, "embedding", None) or e
-            if hasattr(v, "values"):
-                v = v.values
-            out.append(list(v))
+            v = e.values
+            normed = np.array(v) / norm(np.array(v))
+            out.append(normed.tolist())
         return out
-    if hasattr(resp, "embedding"):
-        v = resp.embedding
-        if hasattr(v, "values"):
-            v = v.values
-        return [list(v)] * len(texts)
-    # dict-like fallback
-    if isinstance(resp, dict):
-        if "embeddings" in resp:
-            return [list(e.get("values", e)) for e in resp["embeddings"]]
-        if "embedding" in resp:
-            v = resp["embedding"].get("values")
-            return [list(v)] * len(texts)
-    raise RuntimeError("Unexpected embedding response shape")
+    else:
+        raise RuntimeError("Unexpected embedding response shape")
 
 
 def to_vector_literal(vec: List[float]) -> str:
     # pgvector textual representation: [v1,v2,...]
     # Keep compact to reduce payload
-    return "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
+    return "[" + ",".join(f"{x:.16f}" for x in vec) + "]"
 
 
 def fetch_batch(cur, after_id: int, limit: int) -> List[Tuple[int, str]]:
@@ -119,7 +117,9 @@ def main():
     cur.execute("SET LOCAL statement_timeout = '600s'")
 
     # 総件数（embedがNULL かつ 底本行を除外）
-    cur.execute("SELECT COUNT(*) FROM paragraphs WHERE embed IS NULL AND text !~ '底本\\s*[：:]'")
+    cur.execute(
+        "SELECT COUNT(*) FROM paragraphs WHERE embed IS NULL AND text !~ '底本\\s*[：:]'"
+    )
     total = cur.fetchone()[0]
     print(f"target rows: {total}")
 
@@ -151,7 +151,9 @@ def main():
             if processed % 500 == 0:
                 conn.commit()
                 dt = time.time() - t0
-                print(f"processed {processed}/{total} ({processed/total*100:.1f}%) in {dt:.1f}s")
+                print(
+                    f"processed {processed}/{total} ({processed/total*100:.1f}%) in {dt:.1f}s"
+                )
         after_id = rows[-1][0]
     conn.commit()
     dt = time.time() - t0

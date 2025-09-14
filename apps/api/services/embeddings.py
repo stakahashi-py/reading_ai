@@ -1,7 +1,7 @@
 import os
 from typing import Optional, List, Any
 
-EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-004")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "gemini-embedding-001")
 PROJECT_ID = os.getenv("PROJECT_ID")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "asia-northeast1")
 
@@ -12,7 +12,10 @@ def get_client():
     global _client
     if _client is None:
         from google import genai  # lazy import
-        _client = genai.Client(vertexai=True, project=PROJECT_ID, location=VERTEX_LOCATION)
+
+        _client = genai.Client(
+            vertexai=True, project=PROJECT_ID, location=VERTEX_LOCATION
+        )
     return _client
 
 
