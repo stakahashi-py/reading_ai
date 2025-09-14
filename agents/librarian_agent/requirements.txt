@@ -1,0 +1,8 @@
+sqlalchemy==2.0.34
+psycopg[binary]
+pg8000==1.31.2
+cloud-sql-python-connector==1.18.4
+python-dotenv==1.0.1
+google-genai>=0.3.0
+google-cloud-aiplatform>=1.66.0
+google-adk==1.14.0

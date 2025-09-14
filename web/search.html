@@ -162,7 +162,7 @@
       await renderResults(withStatus.map(x => x.b), true);
     }
 
-    // 右カラム：チャット
+    // 右カラム：チャット（基本メッセージバブル）
     function appendChat(role, html) {
       const box = document.getElementById('chat-log');
       const wrap = document.createElement('div');
@@ -173,6 +173,285 @@
       wrap.appendChild(bubble);
       box.appendChild(wrap);
       box.scrollTop = box.scrollHeight;
+    }
+
+    // --- Librarian Agent 連携（SSE） ---
+    const AGENT_BASE = 'https://librarian-agent-858293481093.us-central1.run.app';
+    let USER_ID = null; // Firebaseのuidを使用
+    const SESSION_ID = 'session';
+    let chatBooted = false; // 初チャット判定
+
+    function createStreamArea() {
+      // 1つの応答に対して、イベント順に要素を積むコンテナ
+      const box = document.getElementById('chat-log');
+      const wrap = document.createElement('div');
+      wrap.className = 'flex justify-start my-2';
+      const col = document.createElement('div');
+      col.className = 'max-w-[80%] flex flex-col gap-2';
+      wrap.appendChild(col);
+      box.appendChild(wrap);
+      box.scrollTop = box.scrollHeight;
+
+      let statusEl = null;
+      let textBubble = null;
+      let buffer = '';
+      let lastIncoming = '';
+
+      const addStatus = (text) => {
+        if (!statusEl) {
+          statusEl = document.createElement('div');
+          statusEl.className = 'rounded-2xl px-3 py-2 text-xs bg-gray-50 text-gray-600 border border-gray-200';
+          col.appendChild(statusEl);
+        }
+        statusEl.textContent = text;
+        box.scrollTop = box.scrollHeight;
+      };
+      const removeStatus = () => {
+        if (statusEl && statusEl.parentNode) statusEl.parentNode.removeChild(statusEl);
+        statusEl = null;
+      };
+
+      const stylizeLinks = (container) => {
+        const as = container.querySelectorAll('a');
+        as.forEach(a => {
+          const href = a.getAttribute('href') || '';
+          if (/^\d+$/.test(href)) {
+            a.setAttribute('href', `/web/read.html?book_id=${href}`);
+          }
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+          a.classList.add('text-sky-600', 'underline', 'hover:text-sky-700');
+        });
+      };
+
+      const appendText = (incoming) => {
+        // 進行状態のバブルは削除
+        removeStatus();
+        if (!incoming) return;
+        // 重複/累積送信の吸収
+        let chunk = incoming;
+        if (lastIncoming && incoming.startsWith(lastIncoming)) {
+          chunk = incoming.slice(lastIncoming.length);
+          lastIncoming = incoming;
+        } else if (lastIncoming && (lastIncoming.endsWith(incoming) || incoming === lastIncoming)) {
+          // 同一または一部重複 → 追記不要
+          lastIncoming = incoming;
+          return;
+        } else {
+          lastIncoming += incoming;
+        }
+        buffer += chunk;
+
+        // レイジー生成
+        if (!textBubble) {
+          textBubble = document.createElement('div');
+          textBubble.className = 'rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800';
+          col.appendChild(textBubble);
+        }
+
+        // テキストノードを安全に積む（<a ...>...</a> だけ特別扱い）
+        const flushText = (text) => {
+          if (!text) return;
+          const parts = text.split(/\n/);
+          for (let i = 0; i < parts.length; i++) {
+            if (parts[i]) textBubble.appendChild(document.createTextNode(parts[i]));
+            if (i < parts.length - 1) textBubble.appendChild(document.createElement('br'));
+          }
+        };
+
+        const makeAnchor = (href, label) => {
+          const a = document.createElement('a');
+          const isNum = /^\d+$/.test(href || '');
+          a.href = isNum ? `/web/read.html?book_id=${href}` : href || '#';
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+          a.className = 'text-sky-600 underline hover:text-sky-700';
+          a.textContent = label || href || '';
+          return a;
+        };
+
+        while (buffer.length) {
+          const i = buffer.indexOf('<a ');
+          if (i === -1) {
+            // アンカーが無い → 全てテキストとして出力
+            flushText(buffer);
+            buffer = '';
+            break;
+          }
+          // 先頭のテキスト部分を出力
+          if (i > 0) {
+            flushText(buffer.slice(0, i));
+            buffer = buffer.slice(i);
+          }
+          // ここから <a ...> を解析
+          const closeTag = buffer.indexOf('</a>');
+          const gt = buffer.indexOf('>');
+          if (gt === -1 || closeTag === -1 || gt > closeTag) {
+            // 閉じタグまたは '>' がまだ来ていない → さらに受信を待つ
+            break;
+          }
+          const openTag = buffer.slice(0, gt + 1); // 例: <a href="123">
+          const inner = buffer.slice(gt + 1, closeTag); // 例: タイトル
+          const rest = buffer.slice(closeTag + 4);
+
+          // href抽出
+          const m = openTag.match(/href\s*=\s*\"([^\"]*)\"/i);
+          const href = m ? m[1] : '';
+          // アンカー要素を追加
+          textBubble.appendChild(makeAnchor(href, inner));
+
+          buffer = rest;
+        }
+
+        box.scrollTop = box.scrollHeight;
+      };
+
+      const appendFunctionCall = (name) => {
+        const el = document.createElement('div');
+        el.className = 'rounded-xl px-3 py-2 text-xs bg-amber-50 text-amber-900 border border-amber-200';
+        el.textContent = `関数呼び出し中 -${name}-`;
+        col.appendChild(el);
+        // 次のテキストは新規バブルにする
+        textBubble = null;
+        buffer = '';
+        lastIncoming = '';
+        box.scrollTop = box.scrollHeight;
+      };
+
+      return { addStatus, removeStatus, appendText, appendFunctionCall };
+    }
+
+    function rewriteLinksForReader(html) { return html; }
+
+    async function initAgentSession() {
+      // プリフライト回避のため自サーバ経由で初期化
+      await fetch(`/v1/librarian/session/init?user_id=${encodeURIComponent(USER_ID)}`, { method: 'POST' });
+    }
+
+    async function buildReadingBackground() {
+      // FastAPIから 読了本+感想、ハイライトを取得し所定フォーマットへ
+      try {
+        const [progRes, hlAllRes] = await Promise.all([
+          fetch('/v1/progress/list', { method: 'POST', body: JSON.stringify({}) }),
+          fetch('/v1/highlights'),
+        ]);
+        const progData = await progRes.json();
+        const hlAll = await hlAllRes.json();
+        const completed = (progData.items || []).filter(it => !!it.completed_at);
+        const bookIds = [...new Set(completed.map(it => it.book_id))];
+        const books = await Promise.all(bookIds.map(async id => {
+          const r = await fetch(`/v1/books/${id}`);
+          const d = await r.json();
+          return d && d.id ? d : { id };
+        }));
+        const feedbacks = await Promise.all(bookIds.map(async id => {
+          const r = await fetch(`/v1/feedback?book_id=${id}`);
+          const d = await r.json();
+          return { id, text: (d && d.item && d.item.text) || '' };
+        }));
+        const fbById = Object.fromEntries(feedbacks.map(f => [f.id, f.text]));
+        const bookById = Object.fromEntries(books.map(b => [b.id, b]));
+        const hlByBook = {};
+        for (const h of (hlAll.items || [])) {
+          if (!hlByBook[h.book_id]) hlByBook[h.book_id] = [];
+          hlByBook[h.book_id].push(h.text_snippet);
+        }
+
+        const lines = [];
+        lines.push('# ユーザーの読書履歴');
+        lines.push('## 読了済みの本');
+        for (const id of bookIds) {
+          const b = bookById[id] || { title: '不明', author: '' };
+          const title = b.title || '不明';
+          const author = b.author || '';
+          const fb = (fbById[id] || '').trim();
+          lines.push(`### ${title} ${author}`.trim());
+          lines.push(`感想: ${fb || '（未記入）'}`);
+        }
+        lines.push('## ハイライトした文章');
+        for (const id of bookIds) {
+          const b = bookById[id] || { title: '不明', author: '' };
+          const title = b.title || '不明';
+          const author = b.author || '';
+          const hs = hlByBook[id] || [];
+          if (!hs.length) continue;
+          lines.push(`### ${title} ${author}`.trim());
+          for (const t of hs) lines.push(`> ${t}`);
+        }
+        return lines.join('\n');
+      } catch (e) {
+        // 失敗時は空の背景にする
+        return '# ユーザーの読書履歴\n(取得に失敗しました)';
+      }
+    }
+
+    async function postSSEAndStream({ userInput, backgroundIfFirst, streamUI }) {
+      const controller = new AbortController();
+
+      const payload = chatBooted ? {
+        app_name: 'librarian_agent',
+        user_id: USER_ID,
+        session_id: SESSION_ID,
+        new_message: { role: 'user', parts: [{ text: userInput }] },
+        streaming: true,
+      } : {
+        app_name: 'librarian_agent',
+        user_id: USER_ID,
+        session_id: SESSION_ID,
+        new_message: { role: 'user', parts: [{ text: `${backgroundIfFirst}\n# ユーザーの質問\n${userInput}` }] },
+        streaming: true,
+      };
+
+      let receivedAny = false;
+      try {
+        // 自サーバのプロキシにPOST → 外部SSEを中継
+        const res = await fetch(`/v1/librarian/run_sse`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSEは\n\nで区切られる想定
+          const parts = buffer.split(/\n\n/);
+          buffer = parts.pop() || '';
+          for (const evt of parts) {
+            // data: ... 行のみ抽出
+            const m = evt.split('\n').filter(l => l.startsWith('data:'))
+                         .map(l => l.replace(/^data:\s?/, '')).join('');
+            if (!m) continue;
+            let json;
+            try { json = JSON.parse(m); } catch (_) { continue; }
+            const part = json && json.content && json.content.parts && json.content.parts[0] || {};
+            if (part.text && json.partial) {
+              receivedAny = true;
+              const html = rewriteLinksForReader(part.text);
+              streamUI.appendText(html);
+            } else if (part.functionCall) {
+              streamUI.appendFunctionCall(part.functionCall.name);
+            }
+            // スクロール追従
+            const box = document.getElementById('chat-log');
+            box.scrollTop = box.scrollHeight;
+          }
+        }
+      } catch (e) {
+        streamUI.removeStatus();
+        const errUI = createStreamArea();
+        errUI.appendText(`ストリーミングに失敗しました: ${e && e.message ? e.message : e}`);
+      } finally {
+        chatBooted = true;
+        // 応答が全く無い場合はステータスのみ置換
+        if (!receivedAny) streamUI.addStatus('応答がありませんでした。');
+      }
     }
 
     // 感想モーダル
@@ -204,26 +483,30 @@
       const inp = document.getElementById('chat-input');
       const q = inp.value.trim(); if (!q) return;
       appendChat('user', q.replaceAll('\n', '<br/>'));
-      inp.value = ''; setTyping(true);
-      const box = document.getElementById('chat-log');
-      const wrap = document.createElement('div'); wrap.className = 'flex justify-start my-2';
-      const bubble = document.createElement('div'); bubble.className = 'max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
-      bubble.textContent = '検索中…';
-      try {
-        const res = await fetch('/v1/search/llm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q, limit: 5 }) });
-        if (!res.ok) throw new Error('request failed');
-        const data = await res.json();
-        const items = data.items || [];
-        if (!items.length) { bubble.textContent = '関連する作品が見つかりませんでした。'; }
-        else {
-          const lines = items.map(it => {
-            const subtitle = [it.author, it.era].filter(Boolean).join(' / ');
-            return `・<a href=\"/web/read.html?book_id=${it.id}\">${(it.title || 'Untitled')}</a>（${subtitle}）`;
-          });
-          bubble.innerHTML = lines.join('<br/>');
-        }
-      } catch (e) { bubble.textContent = '検索に失敗しました'; }
-      finally { setTyping(false); }
+      inp.value = '';
+
+      // 初回のみ：セッション初期化＋背景構築
+      let background = '';
+      if (!chatBooted) {
+        // Firebaseのuidを取得
+        try {
+          const u = (window.firebase && window.firebaseReady) ? await window.firebaseReady : null;
+          USER_ID = u && u.uid ? u.uid : 'anonymous';
+        } catch (_) { USER_ID = 'anonymous'; }
+        // この応答のUI領域
+        const streamUI = createStreamArea();
+        streamUI.addStatus('情報収集中...');
+        await initAgentSession();
+        background = await buildReadingBackground();
+        // 情報収集完了 → ストリーミングの待機表示へ
+        streamUI.addStatus('考え中...');
+        await postSSEAndStream({ userInput: q, backgroundIfFirst: background, streamUI });
+        return;
+      }
+      // 2回目以降：直接ストリーミング（考え中...表示）
+      const streamUI = createStreamArea();
+      streamUI.addStatus('考え中...');
+      await postSSEAndStream({ userInput: q, backgroundIfFirst: background, streamUI });
     }
 
     window.addEventListener('DOMContentLoaded', async () => {
@@ -243,7 +526,7 @@
 
 <body>
   <header class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
-    <strong class="text-2xl">MAsterPIece</strong> - 名作を、もっと気軽に、面白く。 -
+    <strong class="text-2xl">MAsterpIece</strong> - 名作を、もっと気軽に、面白く。 -
   </header>
   <div class="p-4 grid grid-cols-10 gap-4">
     <!-- 左：通常検索（6） -->
