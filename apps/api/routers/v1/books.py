@@ -95,4 +95,19 @@ def get_paragraphs(
         return {"book_id": book_id, "offset": offset, "limit": limit, "total": 0, "items": [], "error": str(e)}
 
 
+@router.get("/{book_id}/para_index")
+def get_para_index(book_id: int, db: Session = Depends(get_db)):
+    """段落IDとインデックスだけを返す軽量エンドポイント。静的HTMLと併用。"""
+    try:
+        rows = (
+            db.query(Paragraph.id, Paragraph.idx)
+            .filter(Paragraph.book_id == book_id)
+            .order_by(Paragraph.idx.asc())
+            .all()
+        )
+        items = [{"id": r[0], "idx": r[1]} for r in rows]
+        return {"book_id": book_id, "items": items}
+    except Exception as e:
+        return {"book_id": book_id, "items": [], "error": str(e)}
+
  

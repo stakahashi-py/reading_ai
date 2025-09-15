@@ -40,27 +40,44 @@
   <script>
     function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
     let bookId = parseInt(qs('book_id') || '0', 10);
+    let bookSlug = '';
     const selected = new Map(); // para_id -> para
     const highlightsByPara = new Map(); // para_id -> highlight {id,...}
     const paraElById = new Map();
     const paraById = new Map();
+    const paraIdByIdx = new Map();
+    const paraElByIdx = new Map();
+    let staticLoaded = false;
     let offset = 0; const limit = 200; let loading=false; let total=0;
     // QAチャット履歴（サーバーに送る前提の最小フォーマット）
     const chatHistory = []; // [{role:'user'|'assistant', content:string}]
 
     async function loadBook() {
-      const meta = await (await fetch(`/v1/books/${bookId}`)).json();
+      const [meta, progress] = await Promise.all([
+        (await fetch(`/v1/books/${bookId}`)).json(),
+        (await fetch(`/v1/progress?book_id=${bookId}`)).json().catch(()=>({}))
+      ]);
+      bookSlug = meta.slug || '';
       document.getElementById('title').textContent = meta.title || 'Untitled';
       document.getElementById('author').textContent = meta.author || '';
       document.getElementById('paras').innerHTML = '';
-      offset = 0; total = 0; await loadMore();
-      // 既存ハイライトを復元
+      staticLoaded = await tryLoadStatic(progress);
+      // 旧APIフォールバックは停止（静的HTML優先で固定）
+      // if (!staticLoaded){
+      //   offset = 0; total = 0; await loadMore();
+      // }
+      if (!staticLoaded){
+        const list = document.getElementById('paras');
+        list.innerHTML = '<div class="text-sm text-gray-500">本文の静的HTMLが見つかりませんでした。</div>';
+      }
+      await restoreUserArtifacts();
+      // 既存ハイライトを復元（旧ロジック互換のため残置）
       try{
         const r = await fetch(`/v1/highlights?book_id=${bookId}`);
         const data = await r.json();
         for (const h of (data.items||[])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
       }catch(e){}
-      // 翻訳・ギャラリーの復元
+      // 翻訳・ギャラリーの復元（旧ロジック互換のため残置）
       try{
         const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
         for (const t of (tr.items||[])){
@@ -87,6 +104,91 @@
             holder.innerHTML = `<img src="${g.asset_url}" class="max-w-full border border-gray-200 rounded"/>`;
           } else if (g.type==='video'){
             holder.innerHTML = `<video src="${g.asset_url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
+          }
+          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
+          anchor.after(holder);
+        }
+      }catch(e){}
+    }
+
+    async function tryLoadStatic(progress){
+      if (!bookSlug) return false;
+      try{
+        const res = await fetch(`/web/books_html/${encodeURIComponent(bookSlug)}.html`, { cache: 'force-cache' });
+        if (!res.ok) return false;
+        const html = await res.text();
+        const list = document.getElementById('paras');
+        list.innerHTML = html;
+        // idx -> 要素
+        paraElByIdx.clear();
+        list.querySelectorAll('.para[data-idx]').forEach(el=>{
+          const idx = parseInt(el.getAttribute('data-idx')||'0',10);
+          paraElByIdx.set(idx, el);
+        });
+        // idx -> para_id, para_id -> 要素（APIで取得）
+        const idxRes = await fetch(`/v1/books/${bookId}/para_index`);
+        const idxData = await idxRes.json();
+        paraIdByIdx.clear(); paraElById.clear();
+        for (const it of (idxData.items||[])){
+          paraIdByIdx.set(it.idx, it.id);
+          const el = paraElByIdx.get(it.idx);
+          if (el){ paraElById.set(it.id, el); }
+        }
+        // 段落クリック（委譲）
+        list.addEventListener('click', (e)=>{
+          const t = e.target.closest ? e.target.closest('.para') : null;
+          if (!t || !list.contains(t)) return;
+          const idx = parseInt(t.getAttribute('data-idx')||'0',10);
+          const pid = paraIdByIdx.get(idx);
+          if (!pid) return;
+          const text = (t.querySelector('.leading-relaxed')?.textContent||'').replaceAll('\n','\n');
+          toggleSelect({ id: pid, idx, text });
+        });
+        // 進捗位置へジャンプ
+        const targetIdx = (typeof progress?.last_paragraph_index === 'number')
+          ? progress.last_paragraph_index
+          : (typeof progress?.scroll_percent === 'number' && paraElByIdx.size > 0)
+            ? Math.max(0, Math.floor((paraElByIdx.size * progress.scroll_percent)/100)-2) : null;
+        if (targetIdx != null){ (document.getElementById(`p-${targetIdx}`) || paraElByIdx.get(targetIdx))?.scrollIntoView({behavior:'instant', block:'start'}); }
+        return true;
+      }catch(e){ return false; }
+    }
+
+    async function restoreUserArtifacts(){
+      // ハイライト
+      try{
+        const r = await fetch(`/v1/highlights?book_id=${bookId}`);
+        const data = await r.json();
+        for (const h of (data.items||[])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
+      }catch(e){}
+      // 翻訳
+      try{
+        const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
+        for (const t of (tr.items||[])){
+          const p = paraElById.get(t.para_id);
+          if (p){
+            const el = document.getElementById(`trans-${t.para_id}`) || (function(){
+              const d = document.createElement('div'); d.id = `trans-${t.para_id}`; d.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
+              d.innerHTML = `<div class=\"text-[11px] text-pink-700 px-2 pt-1\">翻訳結果</div><div class=\"px-2 pb-2 text-sm\" id=\"trans-text-${t.para_id}\"></div>`;
+              p.appendChild(d); return d; })();
+            const tx = document.getElementById(`trans-text-${t.para_id}`); if (tx) tx.textContent = t.text || '';
+            try{ localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text||''); }catch(_){ }
+          }
+        }
+      }catch(e){}
+      // ギャラリー
+      try{
+        const gl = await (await fetch(`/v1/gallery?book_id=${bookId}`)).json();
+        for (const g of (gl.items||[])){
+          const pids = (((g.meta||{}).paragraph_ids)||[]).filter(x=>typeof x==='number');
+          const last = pids.length ? pids[pids.length-1] : null;
+          const anchor = last ? paraElById.get(last) : document.getElementById('paras');
+          if (!anchor) continue;
+          const holder = document.createElement('div'); holder.className = 'my-3 relative group';
+          if (g.type==='image'){
+            holder.innerHTML = `<img src=\"${g.asset_url}\" class=\"max-w-full border border-gray-200 rounded\"/>`;
+          } else if (g.type==='video'){
+            holder.innerHTML = `<video src=\"${g.asset_url}\" class=\"max-w-full border border-gray-200 rounded\" controls></video>`;
           }
           const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
           anchor.after(holder);
@@ -287,9 +389,10 @@
       const denom = Math.max(1, (sh - ch));
       const percent = Math.min(100, Math.max(0, Math.round((sc/denom)*100)));
       maybeSaveProgress(percent);
-      if (!loading && offset < total && (sh - (sc + ch) < 300)) {
-        loadMore();
-      }
+      // 旧APIの無限スクロールは停止
+      // if (!staticLoaded && !loading && offset < total && (sh - (sc + ch) < 300)) {
+      //   loadMore();
+      // }
     }
 
     // 進捗保存（読書中ステータスに利用）
@@ -375,10 +478,11 @@
       const arr = Array.from(highlightsByPara.entries());
       if (!arr.length){ list.innerHTML = '<div class="text-sm text-gray-500">ハイライトはありません</div>'; }
       for (const [pid, h] of arr){
-        const p = paraById.get(pid);
+        const p = paraById.get(pid); // 静的HTML運用時はparaByIdが未設定のためDOMから取得
+        const dom = paraElById.get(pid);
         const btn = document.createElement('button');
         btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded border border-gray-200 my-1';
-        const head = (p?.text||'').replaceAll('\n',' ').slice(0,20);
+        const head = ((p?.text)|| (dom?.querySelector('.leading-relaxed')?.textContent || '')).replaceAll('\n',' ').slice(0,20);
         btn.textContent = `${head}${(p?.text||'').length>20?'…':''}`;
         btn.onclick = ()=>{ modal.close(); paraElById.get(pid)?.scrollIntoView({behavior:'smooth', block:'center'}); };
         list.appendChild(btn);
