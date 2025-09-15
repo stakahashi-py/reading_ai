@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Paragraph vectorization (recompute all) and store into pgvector.
+Book summaries and paragraphs vectorization and store into pgvector.
 Simple pipeline only: fetch -> batch embed -> update. No args, no branching.
 
 Environment:
@@ -97,18 +97,26 @@ def to_vector_literal(vec: List[float]) -> str:
     return "[" + ",".join(f"{x:.16f}" for x in vec) + "]"
 
 
-def fetch_batch(cur, after_id: int, limit: int) -> List[Tuple[int, str]]:
+def fetch_batch(table, cur, after_id: int, limit: int) -> List[Tuple[int, str]]:
     # embed が NULL の行のみ。『底本：/底本:』を含む行は除外。
-    sql = (
-        "SELECT id, text FROM paragraphs "
-        "WHERE id > %s AND embed IS NULL AND text !~ '底本\\s*[：:]' "
-        "ORDER BY id ASC LIMIT %s"
-    )
+    if table == "books":
+        # booksは要約のみ
+        sql = (
+            f"SELECT id, summary FROM {table} "
+            "WHERE id > %s AND embed IS NULL AND summary IS NOT NULL "
+            "ORDER BY id ASC LIMIT %s"
+        )
+    elif table == "paragraphs":
+        sql = (
+            f"SELECT id, text FROM {table} "
+            "WHERE id > %s AND embed IS NULL AND text !~ '底本\\s*[：:]' "
+            "ORDER BY id ASC LIMIT %s"
+        )
     cur.execute(sql, [after_id, limit])
     return [(r[0], r[1]) for r in cur.fetchall()]
 
 
-def main():
+def vectorize(table):
     load_env()
     client = make_embed_client()
     conn, connector = make_db_conn()
@@ -117,9 +125,14 @@ def main():
     cur.execute("SET LOCAL statement_timeout = '600s'")
 
     # 総件数（embedがNULL かつ 底本行を除外）
-    cur.execute(
-        "SELECT COUNT(*) FROM paragraphs WHERE embed IS NULL AND text !~ '底本\\s*[：:]'"
-    )
+    if table == "books":
+        cur.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE embed IS NULL AND summary IS NOT NULL"
+        )
+    elif table == "paragraphs":
+        cur.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE embed IS NULL AND text !~ '底本\\s*[：:]'"
+        )
     total = cur.fetchone()[0]
     print(f"target rows: {total}")
 
@@ -127,7 +140,7 @@ def main():
     after_id = 0
     t0 = time.time()
     while True:
-        rows = fetch_batch(cur, after_id, FETCH_SIZE)
+        rows = fetch_batch(table, cur, after_id, FETCH_SIZE)
         if not rows:
             break
         ids, texts = zip(*rows)
@@ -142,7 +155,7 @@ def main():
                 params.append(to_vector_literal(vec))
                 params.append(int(pid))
             sql = (
-                "UPDATE paragraphs AS p SET embed = v.embed "
+                f"UPDATE {table} AS p SET embed = v.embed "
                 "FROM (VALUES " + ",".join(placeholders) + ") AS v(embed, id) "
                 "WHERE p.id = v.id"
             )
@@ -160,6 +173,13 @@ def main():
     print(f"Done. processed={processed}/{total} in {dt:.1f}s")
     conn.close()
     connector.close()
+
+
+def main():
+    print("Vectorizing book summaries...")
+    vectorize("books")
+    print("Vectorizing paragraphs...")
+    vectorize("paragraphs")
 
 
 if __name__ == "__main__":

@@ -82,18 +82,39 @@ def embed_text(text):
 def run_select_sql(sql: str) -> dict:
     """Run a SELECT SQL query and return the results as a JSON.
     利用できるDBのSchemaは以下の通り。
-    books (id integer, title varchar, author varchar, era varchar, length_chars integer, tags text[], summary text)
+    books (id integer, title varchar, author varchar, era varchar, length_chars integer, summary text)
     paragraphs (id integer, book_id integer, idx integer, text text)
     # Schema補足説明
     - authorは著者名で、苗字・名前の間にスペースが入る場合があります。苗字または名前を「含む」での検索を推奨。
     - eraはその小説が書かれた時代。明治、大正、昭和、不明の4種類。
     - length_charsは小説の文字数。
-    - tagsは小説のジャンルを表すタグ。小説、文学といった種類から、明るい、暗い、恋愛、平和、など多様なタグがある。
     """
     q = sql.strip()
     if not re.match(r"(?is)^\s*select\b", q):
         return {"status": "error", "message": "Only SELECT queries are allowed."}
     result = db.execute(text(sql))
+    return {"status": "success", "rows": [dict(row._mapping) for row in result]}
+
+
+def vector_search_books(query: str, top_k: int = 10) -> dict:
+    """Perform a vector search on the books table and return the top K titles, id, summary, and scores.
+    各行に保存されているのは、各物語の概要文です。
+    物語の概要のような文章をクエリとして生成し、本関数を呼び出してください。"""
+    # クエリのベクトル化
+    query_embedding = embed_text(query)
+    # 正規化
+    query_embedding = np.array(query_embedding) / norm(np.array(query_embedding))
+    # np.ndarray -> List[float] に変換
+    query_embedding = query_embedding.astype(float).tolist()
+
+    sql = f"""
+    SELECT title, id, summary, embed <=> :qvec AS score
+    FROM books
+    ORDER BY score
+    LIMIT {top_k};
+    """
+
+    result = db.execute(text(sql), {"qvec": str(query_embedding)})
     return {"status": "success", "rows": [dict(row._mapping) for row in result]}
 
 
@@ -136,7 +157,7 @@ root_agent = Agent(
     name="AI_librarian",
     model="gemini-2.5-pro",
     instruction=SYSTEM_INSTRUCTION,
-    tools=[run_select_sql, vector_search_paragraphs],
+    tools=[run_select_sql, vector_search_books, vector_search_paragraphs],
 )
 sample_history = """
 # ユーザーの読書履歴
