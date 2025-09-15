@@ -1,11 +1,13 @@
 <!doctype html>
 <html lang="ja">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>読む</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/web/styles.css" />
+  <link rel="icon" href="/web/favicon.ico">
   <script>
     tailwind.config = {
       theme: { extend: { colors: { accent: '#93c5fd' } } }
@@ -19,26 +21,56 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-    .skeleton { background: linear-gradient(90deg,#f0f0f0 25%,#e8e8e8 37%,#f0f0f0 63%); background-size:400% 100%; animation: shimmer 1.4s ease infinite; border:1px solid #eee; border-radius:6px; }
-    @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-    .para { content-visibility: auto; contain-intrinsic-size: 1px 180px; scroll-margin-top: 72px; transition: background-color .15s ease-in-out; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    .skeleton {
+      background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 37%, #f0f0f0 63%);
+      background-size: 400% 100%;
+      animation: shimmer 1.4s ease infinite;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+
+    @keyframes shimmer {
+      0% {
+        background-position: 100% 0;
+      }
+
+      100% {
+        background-position: -100% 0;
+      }
+    }
+
+    .para {
+      content-visibility: auto;
+      contain-intrinsic-size: 1px 180px;
+      scroll-margin-top: 72px;
+      transition: background-color .15s ease-in-out;
+    }
+
     /* 選択(灰) + ハイライト(黄) が重なった場合の混色 */
     .para.bg-gray-50.bg-yellow-50,
     .para.bg-yellow-50.bg-gray-50 {
-      background-color: #F8F5DE !important; /* 淡い黄×灰の中間色 */
+      background-color: #F8F5DE !important;
+      /* 淡い黄×灰の中間色 */
     }
+
     /* ホバー時も違和感のないように少しだけ濃く */
     .para.bg-gray-50.bg-yellow-50:hover,
     .para.bg-yellow-50.bg-gray-50:hover {
       /* 混色のホバーはさらに薄く */
       background-color: #FAF8E8 !important;
     }
+
     /* ハイライトのみ（黄）のホバーも少し薄く */
-    .para.bg-yellow-50:hover { background-color: #FFFEF2 !important; }
+    .para.bg-yellow-50:hover {
+      background-color: #FFFEF2 !important;
+    }
   </style>
   <script>
-    function qs(name){ const p=new URLSearchParams(location.search); return p.get(name); }
+    function qs(name) { const p = new URLSearchParams(location.search); return p.get(name); }
     let bookId = parseInt(qs('book_id') || '0', 10);
     let bookSlug = '';
     const selected = new Map(); // para_id -> para
@@ -48,14 +80,14 @@
     const paraIdByIdx = new Map();
     const paraElByIdx = new Map();
     let staticLoaded = false;
-    let offset = 0; const limit = 200; let loading=false; let total=0;
+    let offset = 0; const limit = 200; let loading = false; let total = 0;
     // QAチャット履歴（サーバーに送る前提の最小フォーマット）
     const chatHistory = []; // [{role:'user'|'assistant', content:string}]
 
     async function loadBook() {
       const [meta, progress] = await Promise.all([
         (await fetch(`/v1/books/${bookId}`)).json(),
-        (await fetch(`/v1/progress?book_id=${bookId}`)).json().catch(()=>({}))
+        (await fetch(`/v1/progress?book_id=${bookId}`)).json().catch(() => ({}))
       ]);
       bookSlug = meta.slug || '';
       document.getElementById('title').textContent = meta.title || 'Untitled';
@@ -66,54 +98,55 @@
       // if (!staticLoaded){
       //   offset = 0; total = 0; await loadMore();
       // }
-      if (!staticLoaded){
+      if (!staticLoaded) {
         const list = document.getElementById('paras');
         list.innerHTML = '<div class="text-sm text-gray-500">本文の静的HTMLが見つかりませんでした。</div>';
       }
       await restoreUserArtifacts();
       // 既存ハイライトを復元（旧ロジック互換のため残置）
-      try{
+      try {
         const r = await fetch(`/v1/highlights?book_id=${bookId}`);
         const data = await r.json();
-        for (const h of (data.items||[])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
-      }catch(e){}
+        for (const h of (data.items || [])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
+      } catch (e) { }
       // 翻訳・ギャラリーの復元（旧ロジック互換のため残置）
-      try{
+      try {
         const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
-        for (const t of (tr.items||[])){
+        for (const t of (tr.items || [])) {
           const p = paraElById.get(t.para_id);
-          if (p){
-            const el = document.getElementById(`trans-${t.para_id}`) || (function(){
+          if (p) {
+            const el = document.getElementById(`trans-${t.para_id}`) || (function () {
               const d = document.createElement('div'); d.id = `trans-${t.para_id}`; d.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
               d.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${t.para_id}"></div>`;
-              p.appendChild(d); return d; })();
+              p.appendChild(d); return d;
+            })();
             const tx = document.getElementById(`trans-text-${t.para_id}`); if (tx) tx.textContent = t.text || '';
-            try{ localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text||''); }catch(_){ }
+            try { localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text || ''); } catch (_) { }
           }
         }
-      }catch(e){}
-      try{
+      } catch (e) { }
+      try {
         const gl = await (await fetch(`/v1/gallery?book_id=${bookId}`)).json();
-        for (const g of (gl.items||[])){
-          const pids = (((g.meta||{}).paragraph_ids)||[]).filter(x=>typeof x==='number');
-          const last = pids.length ? pids[pids.length-1] : null;
+        for (const g of (gl.items || [])) {
+          const pids = (((g.meta || {}).paragraph_ids) || []).filter(x => typeof x === 'number');
+          const last = pids.length ? pids[pids.length - 1] : null;
           const anchor = last ? paraElById.get(last) : document.getElementById('paras');
           if (!anchor) continue;
           const holder = document.createElement('div'); holder.className = 'my-3 relative group';
-          if (g.type==='image'){
+          if (g.type === 'image') {
             holder.innerHTML = `<img src="${g.asset_url}" class="max-w-full border border-gray-200 rounded"/>`;
-          } else if (g.type==='video'){
+          } else if (g.type === 'video') {
             holder.innerHTML = `<video src="${g.asset_url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
           }
-          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
+          const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(g.id, holder); holder.appendChild(del);
           anchor.after(holder);
         }
-      }catch(e){}
+      } catch (e) { }
     }
 
-    async function tryLoadStatic(progress){
+    async function tryLoadStatic(progress) {
       if (!bookSlug) return false;
-      try{
+      try {
         const res = await fetch(`/web/books_html/${encodeURIComponent(bookSlug)}.html`, { cache: 'force-cache' });
         if (!res.ok) return false;
         const html = await res.text();
@@ -121,138 +154,140 @@
         list.innerHTML = html;
         // idx -> 要素
         paraElByIdx.clear();
-        list.querySelectorAll('.para[data-idx]').forEach(el=>{
-          const idx = parseInt(el.getAttribute('data-idx')||'0',10);
+        list.querySelectorAll('.para[data-idx]').forEach(el => {
+          const idx = parseInt(el.getAttribute('data-idx') || '0', 10);
           paraElByIdx.set(idx, el);
         });
         // idx -> para_id, para_id -> 要素（APIで取得）
         const idxRes = await fetch(`/v1/books/${bookId}/para_index`);
         const idxData = await idxRes.json();
         paraIdByIdx.clear(); paraElById.clear();
-        for (const it of (idxData.items||[])){
+        for (const it of (idxData.items || [])) {
           paraIdByIdx.set(it.idx, it.id);
           const el = paraElByIdx.get(it.idx);
-          if (el){ paraElById.set(it.id, el); }
+          if (el) { paraElById.set(it.id, el); }
         }
         // 段落クリック（委譲）
-        list.addEventListener('click', (e)=>{
+        list.addEventListener('click', (e) => {
           const t = e.target.closest ? e.target.closest('.para') : null;
           if (!t || !list.contains(t)) return;
-          const idx = parseInt(t.getAttribute('data-idx')||'0',10);
+          const idx = parseInt(t.getAttribute('data-idx') || '0', 10);
           const pid = paraIdByIdx.get(idx);
           if (!pid) return;
-          const text = (t.querySelector('.leading-relaxed')?.textContent||'').replaceAll('\n','\n');
+          const text = (t.querySelector('.leading-relaxed')?.textContent || '').replaceAll('\n', '\n');
           toggleSelect({ id: pid, idx, text });
         });
         // 進捗位置へジャンプ
         const targetIdx = (typeof progress?.last_paragraph_index === 'number')
           ? progress.last_paragraph_index
           : (typeof progress?.scroll_percent === 'number' && paraElByIdx.size > 0)
-            ? Math.max(0, Math.floor((paraElByIdx.size * progress.scroll_percent)/100)-2) : null;
-        if (targetIdx != null){ (document.getElementById(`p-${targetIdx}`) || paraElByIdx.get(targetIdx))?.scrollIntoView({behavior:'instant', block:'start'}); }
+            ? Math.max(0, Math.floor((paraElByIdx.size * progress.scroll_percent) / 100) - 2) : null;
+        if (targetIdx != null) { (document.getElementById(`p-${targetIdx}`) || paraElByIdx.get(targetIdx))?.scrollIntoView({ behavior: 'instant', block: 'start' }); }
         return true;
-      }catch(e){ return false; }
+      } catch (e) { return false; }
     }
 
-    async function restoreUserArtifacts(){
+    async function restoreUserArtifacts() {
       // ハイライト
-      try{
+      try {
         const r = await fetch(`/v1/highlights?book_id=${bookId}`);
         const data = await r.json();
-        for (const h of (data.items||[])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
-      }catch(e){}
+        for (const h of (data.items || [])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
+      } catch (e) { }
       // 翻訳
-      try{
+      try {
         const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
-        for (const t of (tr.items||[])){
+        for (const t of (tr.items || [])) {
           const p = paraElById.get(t.para_id);
-          if (p){
-            const el = document.getElementById(`trans-${t.para_id}`) || (function(){
+          if (p) {
+            const el = document.getElementById(`trans-${t.para_id}`) || (function () {
               const d = document.createElement('div'); d.id = `trans-${t.para_id}`; d.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
               d.innerHTML = `<div class=\"text-[11px] text-pink-700 px-2 pt-1\">翻訳結果</div><div class=\"px-2 pb-2 text-sm\" id=\"trans-text-${t.para_id}\"></div>`;
-              p.appendChild(d); return d; })();
+              p.appendChild(d); return d;
+            })();
             const tx = document.getElementById(`trans-text-${t.para_id}`); if (tx) tx.textContent = t.text || '';
-            try{ localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text||''); }catch(_){ }
+            try { localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text || ''); } catch (_) { }
           }
         }
-      }catch(e){}
+      } catch (e) { }
       // ギャラリー
-      try{
+      try {
         const gl = await (await fetch(`/v1/gallery?book_id=${bookId}`)).json();
-        for (const g of (gl.items||[])){
-          const pids = (((g.meta||{}).paragraph_ids)||[]).filter(x=>typeof x==='number');
-          const last = pids.length ? pids[pids.length-1] : null;
+        for (const g of (gl.items || [])) {
+          const pids = (((g.meta || {}).paragraph_ids) || []).filter(x => typeof x === 'number');
+          const last = pids.length ? pids[pids.length - 1] : null;
           const anchor = last ? paraElById.get(last) : document.getElementById('paras');
           if (!anchor) continue;
           const holder = document.createElement('div'); holder.className = 'my-3 relative group';
-          if (g.type==='image'){
+          if (g.type === 'image') {
             holder.innerHTML = `<img src=\"${g.asset_url}\" class=\"max-w-full rounded-lg border border-gray-100 shadow-sm\" loading=\"lazy\"/>`;
-          } else if (g.type==='video'){
+          } else if (g.type === 'video') {
             holder.innerHTML = `<video src=\"${g.asset_url}\" class=\"max-w-full rounded-lg border border-gray-100 shadow-sm\" preload=\"metadata\" controls></video>`;
           }
-          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
+          const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(g.id, holder); holder.appendChild(del);
           anchor.after(holder);
         }
-      }catch(e){}
+      } catch (e) { }
     }
 
-    function updateSelectionUI(){
+    function updateSelectionUI() {
       const ids = Array.from(selected.keys());
       const disabled = ids.length === 0;
-      for (const id of ['btn-hl','btn-trans','btn-img','btn-vid']){
+      for (const id of ['btn-hl', 'btn-trans', 'btn-img', 'btn-vid']) {
         const el = document.getElementById(id); if (el) el.disabled = disabled;
       }
       // チャット選択カード
       const cards = document.getElementById('sel-cards');
       cards.innerHTML = '';
-      for (const p of Array.from(selected.values()).sort((a,b)=>a.idx-b.idx)){
+      for (const p of Array.from(selected.values()).sort((a, b) => a.idx - b.idx)) {
         const c = document.createElement('div');
         c.className = 'text-xs bg-sky-50 text-sky-800 ring-1 ring-sky-200 rounded-md px-2 py-1 flex items-center gap-2';
-        const head = p.text.slice(0,20).replaceAll('\n',' ');
-        c.innerHTML = `<span class="text-gray-700">${head}${p.text.length>20?'…':''}</span>`;
-        const x = document.createElement('button'); x.textContent='×'; x.className='text-gray-500'; x.onclick=()=>{toggleSelect(p)};
+        const head = p.text.slice(0, 20).replaceAll('\n', ' ');
+        c.innerHTML = `<span class="text-gray-700">${head}${p.text.length > 20 ? '…' : ''}</span>`;
+        const x = document.createElement('button'); x.textContent = '×'; x.className = 'text-gray-500'; x.onclick = () => { toggleSelect(p) };
         c.prepend(x);
         cards.appendChild(c);
       }
     }
 
-    function toggleSelect(p){
+    function toggleSelect(p) {
       const el = paraElById.get(p.id);
-      const onCls = ['bg-sky-50','ring-1','ring-sky-200','border-l-2','border-sky-300'];
+      const onCls = ['bg-sky-50', 'ring-1', 'ring-sky-200', 'border-l-2', 'border-sky-300'];
       if (selected.has(p.id)) { selected.delete(p.id); if (el) el.classList.remove(...onCls); }
       else { selected.set(p.id, p); if (el) el.classList.add(...onCls); }
       updateSelectionUI();
     }
 
-    function clearSelection(){
-      const onCls = ['bg-sky-50','ring-1','ring-sky-200','border-l-2','border-sky-300'];
+    function clearSelection() {
+      const onCls = ['bg-sky-50', 'ring-1', 'ring-sky-200', 'border-l-2', 'border-sky-300'];
       for (const pid of selected.keys()) { paraElById.get(pid)?.classList.remove(...onCls); }
       selected.clear(); updateSelectionUI();
     }
 
-    async function doTranslate(){
+    async function doTranslate() {
       const sels = Array.from(selected.values());
-      if(!sels.length){ alert('段落を選択してください'); return; }
+      if (!sels.length) { alert('段落を選択してください'); return; }
       // 送信直後に選択解除（体感を軽く）
       clearSelection();
-      for (const p of sels){
-        const el = document.getElementById(`trans-${p.id}`) || (function(){
+      for (const p of sels) {
+        const el = document.getElementById(`trans-${p.id}`) || (function () {
           const t = document.createElement('div'); t.id = `trans-${p.id}`; t.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
           t.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${p.id}">翻訳中…</div>`;
-          paraElById.get(p.id)?.appendChild(t); return t; })();
+          paraElById.get(p.id)?.appendChild(t); return t;
+        })();
         try {
-          const res = await fetch('/v1/translate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: p.id})});
+          const res = await fetch('/v1/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, para_id: p.id }) });
           const data = await res.json();
           document.getElementById(`trans-text-${p.id}`).textContent = data.translation || '';
-          try{ localStorage.setItem(`tr:${bookId}:${p.id}`, data.translation||''); }catch(e){}
-        } catch(e){
+          try { localStorage.setItem(`tr:${bookId}:${p.id}`, data.translation || ''); } catch (e) { }
+        } catch (e) {
           document.getElementById(`trans-text-${p.id}`).textContent = '翻訳に失敗しました';
         }
       }
     }
 
     let qaBusy = false;
-    function setQaBusy(busy){
+    function setQaBusy(busy) {
       const btn = document.getElementById('qa-send');
       if (!btn) return; btn.disabled = busy;
       btn.classList.toggle('bg-sky-500', !busy);
@@ -260,15 +295,15 @@
       btn.classList.toggle('cursor-not-allowed', busy);
       btn.classList.toggle('opacity-70', busy);
     }
-    async function doQA(){
+    async function doQA() {
       if (qaBusy) return;
       const q = document.getElementById('chat-input').value.trim();
-      if(!q){ return; }
+      if (!q) { return; }
       const inp = document.getElementById('chat-input');
       const btn = document.getElementById('qa-send');
       const past = chatHistory.slice(); // 直前までの履歴をサーバーへ
-      appendChat('user', q.replaceAll('\n','<br/>'));
-      chatHistory.push({role:'user', content: q});
+      appendChat('user', q.replaceAll('\n', '<br/>'));
+      chatHistory.push({ role: 'user', content: q });
       document.getElementById('chat-input').value = '';
       setTyping(true);
       qaBusy = true; setQaBusy(true); if (inp) inp.disabled = true;
@@ -278,27 +313,27 @@
       bubble.textContent = '回答を生成中…';
       try {
         // 送信時に選択解除：まず文脈を確定→UIからは即時解除
-        const ordered = Array.from(selected.values()).sort((a,b)=>a.idx-b.idx);
-        const context = ordered.map(p=>p.text).join('\n');
+        const ordered = Array.from(selected.values()).sort((a, b) => a.idx - b.idx);
+        const context = ordered.map(p => p.text).join('\n');
         clearSelection();
         const res = await fetch('/v1/qa', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({book_id: bookId, question: q, context, history: past})
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ book_id: bookId, question: q, context, history: past })
         });
         if (!res.ok) throw new Error('request failed');
         const data = await res.json();
         const answer = (data && data.answer) ? String(data.answer) : '';
         // Markdown を HTML 化（サニタイズ付き）。失敗時はプレーンテキスト。
-        try{
+        try {
           const html = (window.marked && window.DOMPurify)
             ? DOMPurify.sanitize(marked.parse(answer, { breaks: true }))
             : null;
-          if (html != null){ bubble.innerHTML = html; }
+          if (html != null) { bubble.innerHTML = html; }
           else { bubble.style.whiteSpace = 'pre-wrap'; bubble.textContent = answer; }
-        }catch(_){ bubble.style.whiteSpace = 'pre-wrap'; bubble.textContent = answer; }
-        chatHistory.push({role:'assistant', content: answer});
-      } catch(e){
+        } catch (_) { bubble.style.whiteSpace = 'pre-wrap'; bubble.textContent = answer; }
+        chatHistory.push({ role: 'assistant', content: answer });
+      } catch (e) {
         bubble.textContent = '回答に失敗しました';
       } finally {
         setTyping(false);
@@ -306,57 +341,57 @@
       }
     }
 
-    async function saveHighlight(){
+    async function saveHighlight() {
       const sels = Array.from(selected.values());
-      if(!sels.length){ alert('段落を選択してください'); return; }
+      if (!sels.length) { alert('段落を選択してください'); return; }
       // 送信直後に選択解除
       clearSelection();
-      for (const p of sels){
+      for (const p of sels) {
         const existing = highlightsByPara.get(p.id);
-        if (existing){
+        if (existing) {
           // 先にUIを更新→削除API
           highlightsByPara.delete(p.id); markHighlighted(p.id, false);
-          try{ await fetch(`/v1/highlights/${existing.id}`, {method:'DELETE'}); }catch(e){}
-        }else{
+          try { await fetch(`/v1/highlights/${existing.id}`, { method: 'DELETE' }); } catch (e) { }
+        } else {
           // 先にUIを更新→作成API
           markHighlighted(p.id, true);
-          try{
-            const res = await fetch('/v1/highlights', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, para_id: p.id, span_start: 0, span_end: p.text.length})});
+          try {
+            const res = await fetch('/v1/highlights', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, para_id: p.id, span_start: 0, span_end: p.text.length }) });
             const data = await res.json();
-            highlightsByPara.set(p.id, {id: data.id, para_id: p.id});
-          }catch(e){ /* 失敗時は次回操作で整合 */ }
+            highlightsByPara.set(p.id, { id: data.id, para_id: p.id });
+          } catch (e) { /* 失敗時は次回操作で整合 */ }
         }
       }
     }
 
     // Image generation from selected paragraph
     let imgController = null;
-    async function generateImage(){
-      const sels = Array.from(selected.values()); if(!sels.length){ alert('段落を選択してください'); return; }
+    async function generateImage() {
+      const sels = Array.from(selected.values()); if (!sels.length) { alert('段落を選択してください'); return; }
       clearSelection();
-      const last = sels.sort((a,b)=>a.idx-b.idx)[sels.length-1];
+      const last = sels.sort((a, b) => a.idx - b.idx)[sels.length - 1];
       const targetEl = paraElById.get(last.id);
       const holder = document.createElement('div'); holder.className = 'my-3 relative group';
       holder.innerHTML = `<div class="skeleton w-full h-48"></div><div class="text-xs text-gray-500 mt-1">生成中…</div>`;
       targetEl.after(holder);
       imgController = new AbortController();
-      try{
-        const source = sels.sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
-        const res = await fetch('/v1/generate/image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source, paragraph_ids: sels.map(x=>x.id)}), signal: imgController.signal});
-        if (!res.ok){ throw new Error('request failed'); }
+      try {
+        const source = sels.sort((a, b) => a.idx - b.idx).map(p => p.text).join('\n');
+        const res = await fetch('/v1/generate/image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, source, paragraph_ids: sels.map(x => x.id) }), signal: imgController.signal });
+        if (!res.ok) { throw new Error('request failed'); }
         const data = await res.json(); let url = data.asset_url || '';
-        if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
+        if (url.startsWith('gs://')) { const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m) { url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
         holder.innerHTML = `<img src="${url}" alt="generated" class="max-w-full rounded-lg border border-gray-100 shadow-sm" loading="lazy"/>`;
-        if (data.gallery_id){
-          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
+        if (data.gallery_id) {
+          const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
-      }catch(e){ holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
+      } catch (e) { holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
       finally { imgController = null; }
     }
-    function cancelImage(){ if (imgController) imgController.abort(); }
+    function cancelImage() { if (imgController) imgController.abort(); }
 
-    async function loadMore(){
-      if (loading) return; loading=true;
+    async function loadMore() {
+      if (loading) return; loading = true;
       const res = await fetch(`/v1/books/${bookId}/paragraphs?offset=${offset}&limit=${limit}`);
       const data = await res.json();
       total = data.total || 0;
@@ -367,12 +402,12 @@
         const el = document.createElement('div');
         el.className = 'para rounded-lg p-3 hover:bg-gray-50 transition';
         el.dataset.paraId = p.id; el.dataset.idx = p.idx;
-        el.innerHTML = `<div class="leading-relaxed">${p.text.replaceAll('\n','<br/>')}</div>`;
-        el.addEventListener('click', ()=> toggleSelect(p));
+        el.innerHTML = `<div class="leading-relaxed">${p.text.replaceAll('\n', '<br/>')}</div>`;
+        el.addEventListener('click', () => toggleSelect(p));
         frag.appendChild(el); paraElById.set(p.id, el);
         // 翻訳のローカル復元
         const cached = localStorage.getItem(`tr:${bookId}:${p.id}`);
-        if (cached){
+        if (cached) {
           const t = document.createElement('div'); t.id = `trans-${p.id}`; t.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
           t.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${p.id}"></div>`;
           el.appendChild(t);
@@ -381,16 +416,16 @@
       }
       list.appendChild(frag);
       offset += (data.items || []).length;
-      loading=false;
+      loading = false;
       // defer scroll restore; final adjust will run after initial enrich (translations/gallery)
     }
 
-    function onScroll(){
+    function onScroll() {
       const sc = document.documentElement.scrollTop || document.body.scrollTop;
       const sh = document.documentElement.scrollHeight || document.body.scrollHeight;
       const ch = document.documentElement.clientHeight || window.innerHeight;
       const denom = Math.max(1, (sh - ch));
-      const percent = Math.min(100, Math.max(0, Math.round((sc/denom)*100)));
+      const percent = Math.min(100, Math.max(0, Math.round((sc / denom) * 100)));
       maybeSaveProgress(percent);
       if (!loading && offset < total && (sh - (sc + ch) < 300)) {
         loadMore();
@@ -398,173 +433,203 @@
     }
 
     // 進捗保存（読書中ステータスに利用）
-    let lastSaved = -1; let saveTimer=null;
-    function firstVisibleIdx(){
+    let lastSaved = -1; let saveTimer = null;
+    function firstVisibleIdx() {
       const paras = document.querySelectorAll('.para');
       let best = null; let bestTop = Infinity;
-      for (const el of paras){
+      for (const el of paras) {
         const r = el.getBoundingClientRect();
         if (r.bottom < 0) continue; // above
         const dist = Math.abs(r.top);
-        if (dist < bestTop){ bestTop = dist; best = el; }
+        if (dist < bestTop) { bestTop = dist; best = el; }
       }
-      return best ? parseInt(best.dataset.idx||'0',10) : null;
+      return best ? parseInt(best.dataset.idx || '0', 10) : null;
     }
-    function maybeSaveProgress(percent){
+    function maybeSaveProgress(percent) {
       if (Math.abs(percent - lastSaved) < 5) return;
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(async ()=>{
+      saveTimer = setTimeout(async () => {
         lastSaved = percent;
         const idx = firstVisibleIdx();
-        try{
-          await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent, last_paragraph_index: idx})});
-        }catch(_){}
+        try {
+          await fetch('/v1/progress', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, scroll_percent: percent, last_paragraph_index: idx }) });
+        } catch (_) { }
       }, 500);
     }
 
-    window.addEventListener('DOMContentLoaded', ()=>{ loadBook(); window.addEventListener('scroll', onScroll, {passive:true}); appendChat('assistant','本に関する疑問をどうぞ。'); });
+    window.addEventListener('DOMContentLoaded', () => { loadBook(); window.addEventListener('scroll', onScroll, { passive: true }); appendChat('assistant', '本に関する疑問をどうぞ。'); });
 
-    async function generateVideo(){
-      const sels = Array.from(selected.values()); if(!sels.length){ alert('段落を選択してください'); return; }
+    async function generateVideo() {
+      const sels = Array.from(selected.values()); if (!sels.length) { alert('段落を選択してください'); return; }
       clearSelection();
       const aspect = '16:9';
-      const last = sels.sort((a,b)=>a.idx-b.idx)[sels.length-1];
+      const last = sels.sort((a, b) => a.idx - b.idx)[sels.length - 1];
       const targetEl = paraElById.get(last.id);
       const holder = document.createElement('div'); holder.className = 'my-3 relative group';
       holder.innerHTML = `<div class="skeleton w-full h-48"></div><div class="text-xs text-gray-500 mt-1">生成中…</div>`;
       targetEl.after(holder);
       vidController = new AbortController();
-      try{
-        const source = sels.sort((a,b)=>a.idx-b.idx).map(p=>p.text).join('\n');
-        const res = await fetch('/v1/generate/video', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, source, aspect, paragraph_ids: sels.map(x=>x.id)}), signal: vidController.signal});
-        if (!res.ok){ throw new Error('request failed'); }
+      try {
+        const source = sels.sort((a, b) => a.idx - b.idx).map(p => p.text).join('\n');
+        const res = await fetch('/v1/generate/video', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, source, aspect, paragraph_ids: sels.map(x => x.id) }), signal: vidController.signal });
+        if (!res.ok) { throw new Error('request failed'); }
         const data = await res.json(); let url = data.asset_url || (data.video_uris && data.video_uris[0]) || '';
-        if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
+        if (url.startsWith('gs://')) { const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m) { url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
         holder.innerHTML = `<video src="${url}" class="max-w-full rounded-lg border border-gray-100 shadow-sm" preload="metadata" controls></video>`;
-        if (data.gallery_id){
-          const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
+        if (data.gallery_id) {
+          const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
-      }catch(e){ holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
+      } catch (e) { holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
       finally { vidController = null; }
     }
-    function cancelVideo(){ if (vidController) vidController.abort(); }
+    function cancelVideo() { if (vidController) vidController.abort(); }
 
-    function markHighlighted(paraId, on){
+    function markHighlighted(paraId, on) {
       const el = paraElById.get(paraId); if (!el) return;
       if (on) el.classList.add('bg-yellow-50'); else el.classList.remove('bg-yellow-50');
     }
 
     // チャット（右）
-    function appendChat(role, html){
+    function appendChat(role, html) {
       const box = document.getElementById('chat-log');
       const wrap = document.createElement('div');
-      wrap.className = `flex ${role==='user' ? 'justify-end' : 'justify-start'} my-2`;
+      wrap.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'} my-2`;
       const bubble = document.createElement('div');
-      bubble.className = `max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role==='user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
+      bubble.className = `max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm ${role === 'user' ? 'bg-sky-500 text-white' : 'bg-gray-100 text-gray-800'}`;
       bubble.innerHTML = html;
       wrap.appendChild(bubble);
       box.appendChild(wrap);
       box.scrollTop = box.scrollHeight;
     }
-    function resetChatHistory(){
+    function resetChatHistory() {
       chatHistory.length = 0; // 配列を空に
       const box = document.getElementById('chat-log');
       box.innerHTML = '';
-      appendChat('assistant','本に関する疑問をどうぞ。');
+      appendChat('assistant', '本に関する疑問をどうぞ。');
     }
-    function setTyping(on){ const t = document.getElementById('chat-typing'); if (!t) return; t.classList.toggle('hidden', !on); }
-    function openJumpModal(){
+    function setTyping(on) { const t = document.getElementById('chat-typing'); if (!t) return; t.classList.toggle('hidden', !on); }
+    function openJumpModal() {
       const modal = document.getElementById('jump-modal');
       const list = document.getElementById('jump-list');
-      list.innerHTML='';
+      list.innerHTML = '';
       const arr = Array.from(highlightsByPara.entries());
-      if (!arr.length){ list.innerHTML = '<div class="text-sm text-gray-500">ハイライトはありません</div>'; }
-      for (const [pid, h] of arr){
+      if (!arr.length) { list.innerHTML = '<div class="text-sm text-gray-500">ハイライトはありません</div>'; }
+      for (const [pid, h] of arr) {
         const p = paraById.get(pid); // 静的HTML運用時はparaByIdが未設定のためDOMから取得
         const dom = paraElById.get(pid);
         const btn = document.createElement('button');
         btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded-lg border border-gray-200 my-1';
-        const head = ((p?.text)|| (dom?.querySelector('.leading-relaxed')?.textContent || '')).replaceAll('\n',' ').slice(0,20);
-        btn.textContent = `${head}${(p?.text||'').length>20?'…':''}`;
-        btn.onclick = ()=>{ modal.close(); paraElById.get(pid)?.scrollIntoView({behavior:'smooth', block:'center'}); };
+        const head = ((p?.text) || (dom?.querySelector('.leading-relaxed')?.textContent || '')).replaceAll('\n', ' ').slice(0, 20);
+        btn.textContent = `${head}${(p?.text || '').length > 20 ? '…' : ''}`;
+        btn.onclick = () => { modal.close(); paraElById.get(pid)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
         list.appendChild(btn);
       }
       modal.showModal();
     }
 
-    async function deleteAsset(galleryId, holder){
+    async function deleteAsset(galleryId, holder) {
       // 先に即座にDOMから除去して体感を速く
       if (holder && holder.parentNode) holder.parentNode.removeChild(holder);
-      try{ fetch(`/v1/gallery/${galleryId}`, {method:'DELETE'}).catch(()=>{}); }catch(e){}
+      try { fetch(`/v1/gallery/${galleryId}`, { method: 'DELETE' }).catch(() => { }); } catch (e) { }
     }
   </script>
 </head>
+
 <body>
-  <header class="sticky top-0 z-20 bg-white/90 backdrop-blur h-14 border-b border-gray-100 shadow-sm px-4 flex items-center gap-3" style="--header-h: 56px;">
-    <a href="/web/search.html" aria-label="戻る" class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 transition shrink-0">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+  <header
+    class="sticky top-0 z-20 bg-white/90 backdrop-blur h-14 border-b border-gray-100 shadow-sm px-4 flex items-center gap-3"
+    style="--header-h: 56px;">
+    <a href="/web/search.html" aria-label="戻る"
+      class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 transition shrink-0">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+      </svg>
       <span class="hidden sm:inline">戻る</span>
     </a>
     <div class="flex-1 flex items-center gap-2 min-w-0">
       <div id="title" class="font-semibold truncate"></div>
       <div id="author" class="text-gray-500 text-sm truncate"></div>
     </div>
-    <button id="chat-toggle-header" class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 text-sm shrink-0 lg:hidden" onclick="toggleChat()">
-      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h6M5 20l3.5-3H17a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v14z"/></svg>
+    <button id="chat-toggle-header"
+      class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 text-sm shrink-0 lg:hidden"
+      onclick="toggleChat()">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round"
+          d="M7 8h10M7 12h6M5 20l3.5-3H17a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v14z" />
+      </svg>
       <span id="chat-toggle-label">チャットを開く</span>
     </button>
   </header>
   <main class="container mx-auto max-w-screen-xl">
-  <div class="p-4 grid grid-cols-10 gap-4">
-    <!-- 本文（6） -->
-    <div id="left-col" class="col-span-10 lg:col-span-6 pb-24">
-      <div id="paras" class="max-w-[70ch] mx-auto space-y-3">
-        <div class="skeleton h-5 w-[85%]"></div>
-        <div class="skeleton h-5 w-[92%]"></div>
-        <div class="skeleton h-5 w-[78%]"></div>
-      </div>
-      <!-- 左カラム内・下部固定（sticky）アクションバー -->
-      <div class="sticky bottom-0 border-t border-gray-100 bg-white/95 supports-[backdrop-filter]:bg-white/85 backdrop-blur-sm z-10 mt-4 py-2 pb-safe shadow-[0_-1px_10px_rgba(0,0,0,.04)]">
-        <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2">
-          <button id="btn-hl" class="h-9 px-3 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="saveHighlight()" disabled>ハイライトする</button>
-          <button id="btn-trans" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="doTranslate()" disabled>ここだけ翻訳</button>
-          <button id="btn-img" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="generateImage()" disabled>挿絵を生成</button>
-          <button id="btn-vid" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="generateVideo()" disabled>動く挿絵を生成</button>
-          <div class="sm:ml-auto col-span-2 sm:col-span-auto justify-self-end">
-            <button id="btn-jump" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition" onclick="openJumpModal()">ハイライトに移動</button>
+    <div class="p-4 grid grid-cols-10 gap-4">
+      <!-- 本文（6） -->
+      <div id="left-col" class="col-span-10 lg:col-span-6 pb-24">
+        <div id="paras" class="max-w-[70ch] mx-auto space-y-3">
+          <div class="skeleton h-5 w-[85%]"></div>
+          <div class="skeleton h-5 w-[92%]"></div>
+          <div class="skeleton h-5 w-[78%]"></div>
+        </div>
+        <!-- 左カラム内・下部固定（sticky）アクションバー -->
+        <div
+          class="sticky bottom-0 border-t border-gray-100 bg-white/95 supports-[backdrop-filter]:bg-white/85 backdrop-blur-sm z-10 mt-4 py-2 pb-safe shadow-[0_-1px_10px_rgba(0,0,0,.04)]">
+          <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2">
+            <button id="btn-hl"
+              class="h-9 px-3 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              onclick="saveHighlight()" disabled>ハイライトする</button>
+            <button id="btn-trans"
+              class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              onclick="doTranslate()" disabled>ここだけ翻訳</button>
+            <button id="btn-img"
+              class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              onclick="generateImage()" disabled>挿絵を生成</button>
+            <button id="btn-vid"
+              class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed"
+              onclick="generateVideo()" disabled>動く挿絵を生成</button>
+            <div class="sm:ml-auto col-span-2 sm:col-span-auto justify-self-end">
+              <button id="btn-jump"
+                class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition"
+                onclick="openJumpModal()">ハイライトに移動</button>
+            </div>
           </div>
         </div>
+        <div class="my-6">
+          <button class="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition"
+            onclick="openCompleteModal()">読了</button>
+        </div>
+        <div class="h-16"></div>
       </div>
-      <div class="my-6">
-        <button class="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition" onclick="openCompleteModal()">読了</button>
-      </div>
-      <div class="h-16"></div>
-    </div>
 
-    <!-- チャット（4） -->
-    <div id="chat-col" class="hidden lg:block col-span-10 lg:col-span-4">
-      <div id="chat-panel" class="border border-gray-100 rounded-xl shadow-sm box-border sticky h-chat" style="top: var(--header-h, 64px);">
-        <div class="h-full min-h-0 flex flex-col">
-          <div class="p-2 border-b border-gray-200 bg-gray-50/60 hidden lg:flex justify-between items-center">
-            <div class="text-sm text-gray-600">チャット</div>
-            <div class="flex items-center gap-3">
-              <button class="hidden lg:inline text-sm text-gray-600 hover:text-gray-800" onclick="resetChatHistory()">履歴クリア</button>
+      <!-- チャット（4） -->
+      <div id="chat-col" class="hidden lg:block col-span-10 lg:col-span-4">
+        <div id="chat-panel" class="border border-gray-100 rounded-xl shadow-sm box-border sticky h-chat"
+          style="top: var(--header-h, 64px);">
+          <div class="h-full min-h-0 flex flex-col">
+            <div class="p-2 border-b border-gray-200 bg-gray-50/60 hidden lg:flex justify-between items-center">
+              <div class="text-sm text-gray-600">チャット</div>
+              <div class="flex items-center gap-3">
+                <button class="hidden lg:inline text-sm text-gray-600 hover:text-gray-800"
+                  onclick="resetChatHistory()">履歴クリア</button>
+              </div>
             </div>
-          </div>
-          <div id="chat-log" class="flex-1 min-h-0 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
-          <!-- 入力中インジケータは非表示に変更（冗長なため） -->
-          <div class="border-t border-gray-200 p-2 pb-safe space-y-2">
-            <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
-            <div class="flex gap-2">
-              <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-200 rounded-lg px-3 h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300" onkeydown="if(event.key==='Enter'){doQA()}" />
-              <button id="qa-send" onclick="doQA()" class="bg-sky-500 hover:bg-sky-600 text-white rounded-lg h-10 px-4 transition">送信</button>
+            <div id="chat-log" class="flex-1 min-h-0 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
+            <!-- 入力中インジケータは非表示に変更（冗長なため） -->
+            <div class="border-t border-gray-200 p-2 pb-safe space-y-2">
+              <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
+              <div class="flex gap-2">
+                <input id="chat-input" placeholder="本文について質問…"
+                  class="flex-1 border border-gray-200 rounded-lg px-3 h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+                  onkeydown="if(event.key==='Enter'){doQA()}" />
+                <button id="qa-send" onclick="doQA()"
+                  class="bg-sky-500 hover:bg-sky-600 text-white rounded-lg h-10 px-4 transition">送信</button>
+              </div>
             </div>
           </div>
         </div>
+
       </div>
-      
     </div>
-  </div>
   </main>
 
   <!-- 固定バー（全体幅）は削除し左カラム内stickyへ移設 -->
@@ -573,15 +638,18 @@
     <div class="p-4 modal-body-limit">
       <div class="text-lg font-semibold mb-2">ハイライト一覧</div>
       <div id="jump-list" class="max-h-[60vh] overflow-auto"></div>
-      <div class="text-right mt-3"><button class="px-3 py-1 border rounded" onclick="document.getElementById('jump-modal').close()">閉じる</button></div>
+      <div class="text-right mt-3"><button class="px-3 py-1 border rounded"
+          onclick="document.getElementById('jump-modal').close()">閉じる</button></div>
     </div>
   </dialog>
   <dialog id="complete-modal" class="rounded max-w-xl w-[90vw]">
     <div class="p-4 space-y-3 modal-body-limit">
       <div class="text-lg font-semibold">お疲れ様でした！感想を書いてみませんか？</div>
-      <textarea id="complete-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力（任意）"></textarea>
+      <textarea id="complete-text" class="w-full h-40 border border-gray-300 rounded p-2"
+        placeholder="感想を入力（任意）"></textarea>
       <div class="flex justify-end gap-2">
-        <button class="px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50" onclick="document.getElementById('complete-modal').close()">後で</button>
+        <button class="px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50"
+          onclick="document.getElementById('complete-modal').close()">後で</button>
         <button id="complete-save" class="px-3 py-1 bg-sky-500 hover:bg-sky-600 text-white rounded-lg">保存して閉じる</button>
       </div>
     </div>
@@ -590,32 +658,33 @@
   <dialog id="chat-overlay" class="dialog-full">
     <div class="h-[100dvh] flex flex-col min-h-0">
       <div class="px-2 py-1 border-b border-gray-200 flex items-center justify-end">
-        <button class="px-3 py-1 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50" onclick="closeChatOverlay()">閉じる</button>
+        <button class="px-3 py-1 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+          onclick="closeChatOverlay()">閉じる</button>
       </div>
       <div id="chat-overlay-body" class="flex-1 overflow-hidden min-h-0"></div>
     </div>
   </dialog>
   <script>
-    function isLg(){ return window.matchMedia('(min-width: 1024px)').matches; }
-    function toggleChat(){
+    function isLg() { return window.matchMedia('(min-width: 1024px)').matches; }
+    function toggleChat() {
       if (!isLg()) { openChatOverlay(); return; }
       const chat = document.getElementById('chat-col');
       const left = document.getElementById('left-col');
       const headerLabel = document.getElementById('chat-toggle-label');
       const hidden = chat.classList.contains('hidden');
-      if (hidden){ chat.classList.remove('hidden'); left.classList.remove('lg:col-span-10'); left.classList.add('lg:col-span-6'); if (headerLabel) headerLabel.textContent = 'チャットを隠す'; }
+      if (hidden) { chat.classList.remove('hidden'); left.classList.remove('lg:col-span-10'); left.classList.add('lg:col-span-6'); if (headerLabel) headerLabel.textContent = 'チャットを隠す'; }
       else { chat.classList.add('hidden'); left.classList.remove('lg:col-span-6'); left.classList.add('lg:col-span-10'); if (headerLabel) headerLabel.textContent = 'チャットを表示'; }
     }
-    function openChatOverlay(){
+    function openChatOverlay() {
       const dlg = document.getElementById('chat-overlay');
       const body = document.getElementById('chat-overlay-body');
       const panel = document.getElementById('chat-panel');
       if (!dlg || !body || !panel) return;
-      panel.classList.remove('sticky','h-chat'); panel.classList.add('h-full'); panel.style.top='';
+      panel.classList.remove('sticky', 'h-chat'); panel.classList.add('h-full'); panel.style.top = '';
       body.appendChild(panel);
       dlg.showModal();
     }
-    function closeChatOverlay(){
+    function closeChatOverlay() {
       const dlg = document.getElementById('chat-overlay');
       const body = document.getElementById('chat-overlay-body');
       const panel = document.getElementById('chat-panel');
@@ -623,28 +692,29 @@
       if (!dlg || !body || !panel || !chatCol) return;
       chatCol.appendChild(panel);
       panel.classList.remove('h-full');
-      if (isLg()){ panel.classList.add('sticky','h-chat'); panel.style.top='var(--header-h, 64px)'; }
+      if (isLg()) { panel.classList.add('sticky', 'h-chat'); panel.style.top = 'var(--header-h, 64px)'; }
       dlg.close();
     }
     // 画面幅の変化でヘッダーボタン文言とパネルの状態を調整
-    (function(){
+    (function () {
       const headerLabel = document.getElementById('chat-toggle-label');
       const mql = window.matchMedia('(min-width: 1024px)');
-      const apply = ()=>{ if (headerLabel) headerLabel.textContent = mql.matches ? 'チャットを隠す' : 'チャットを開く'; };
+      const apply = () => { if (headerLabel) headerLabel.textContent = mql.matches ? 'チャットを隠す' : 'チャットを開く'; };
       apply(); mql.addEventListener('change', apply);
     })();
-    function openCompleteModal(){
+    function openCompleteModal() {
       const dlg = document.getElementById('complete-modal');
-      const ta = document.getElementById('complete-text'); ta.value='';
+      const ta = document.getElementById('complete-text'); ta.value = '';
       const save = document.getElementById('complete-save');
-      save.onclick = async ()=>{
+      save.onclick = async () => {
         const text = ta.value.trim();
-        await fetch('/v1/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:bookId})});
-        if (text){ await fetch('/v1/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({book_id:bookId, text})}); }
+        await fetch('/v1/complete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId }) });
+        if (text) { await fetch('/v1/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ book_id: bookId, text }) }); }
         dlg.close();
       };
       dlg.showModal();
     }
   </script>
 </body>
+
 </html>
