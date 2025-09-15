@@ -186,9 +186,9 @@
           if (!anchor) continue;
           const holder = document.createElement('div'); holder.className = 'my-3 relative group';
           if (g.type==='image'){
-            holder.innerHTML = `<img src=\"${g.asset_url}\" class=\"max-w-full border border-gray-200 rounded\"/>`;
+            holder.innerHTML = `<img src=\"${g.asset_url}\" class=\"max-w-full rounded-lg border border-gray-100 shadow-sm\" loading=\"lazy\"/>`;
           } else if (g.type==='video'){
-            holder.innerHTML = `<video src=\"${g.asset_url}\" class=\"max-w-full border border-gray-200 rounded\" controls></video>`;
+            holder.innerHTML = `<video src=\"${g.asset_url}\" class=\"max-w-full rounded-lg border border-gray-100 shadow-sm\" preload=\"metadata\" controls></video>`;
           }
           const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(g.id, holder); holder.appendChild(del);
           anchor.after(holder);
@@ -207,7 +207,7 @@
       cards.innerHTML = '';
       for (const p of Array.from(selected.values()).sort((a,b)=>a.idx-b.idx)){
         const c = document.createElement('div');
-        c.className = 'text-xs bg-gray-100 rounded px-2 py-1 flex items-center gap-2';
+        c.className = 'text-xs bg-sky-50 text-sky-800 ring-1 ring-sky-200 rounded-md px-2 py-1 flex items-center gap-2';
         const head = p.text.slice(0,20).replaceAll('\n',' ');
         c.innerHTML = `<span class="text-gray-700">${head}${p.text.length>20?'…':''}</span>`;
         const x = document.createElement('button'); x.textContent='×'; x.className='text-gray-500'; x.onclick=()=>{toggleSelect(p)};
@@ -217,13 +217,16 @@
     }
 
     function toggleSelect(p){
-      if (selected.has(p.id)) { selected.delete(p.id); paraElById.get(p.id)?.classList.remove('bg-gray-50'); }
-      else { selected.set(p.id, p); paraElById.get(p.id)?.classList.add('bg-gray-50'); }
+      const el = paraElById.get(p.id);
+      const onCls = ['bg-sky-50','ring-1','ring-sky-200','border-l-2','border-sky-300'];
+      if (selected.has(p.id)) { selected.delete(p.id); if (el) el.classList.remove(...onCls); }
+      else { selected.set(p.id, p); if (el) el.classList.add(...onCls); }
       updateSelectionUI();
     }
 
     function clearSelection(){
-      for (const pid of selected.keys()) { paraElById.get(pid)?.classList.remove('bg-gray-50'); }
+      const onCls = ['bg-sky-50','ring-1','ring-sky-200','border-l-2','border-sky-300'];
+      for (const pid of selected.keys()) { paraElById.get(pid)?.classList.remove(...onCls); }
       selected.clear(); updateSelectionUI();
     }
 
@@ -343,7 +346,7 @@
         if (!res.ok){ throw new Error('request failed'); }
         const data = await res.json(); let url = data.asset_url || '';
         if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
-        holder.innerHTML = `<img src="${url}" alt="generated" class="max-w-full border border-gray-200 rounded"/>`;
+        holder.innerHTML = `<img src="${url}" alt="generated" class="max-w-full rounded-lg border border-gray-100 shadow-sm" loading="lazy"/>`;
         if (data.gallery_id){
           const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
@@ -362,7 +365,7 @@
       for (const p of data.items || []) {
         paraById.set(p.id, p);
         const el = document.createElement('div');
-        el.className = 'para rounded hover:bg-gray-50 p-2';
+        el.className = 'para rounded-lg p-3 hover:bg-gray-50 transition';
         el.dataset.paraId = p.id; el.dataset.idx = p.idx;
         el.innerHTML = `<div class="leading-relaxed">${p.text.replaceAll('\n','<br/>')}</div>`;
         el.addEventListener('click', ()=> toggleSelect(p));
@@ -389,10 +392,9 @@
       const denom = Math.max(1, (sh - ch));
       const percent = Math.min(100, Math.max(0, Math.round((sc/denom)*100)));
       maybeSaveProgress(percent);
-      // 旧APIの無限スクロールは停止
-      // if (!staticLoaded && !loading && offset < total && (sh - (sc + ch) < 300)) {
-      //   loadMore();
-      // }
+      if (!loading && offset < total && (sh - (sc + ch) < 300)) {
+        loadMore();
+      }
     }
 
     // 進捗保存（読書中ステータスに利用）
@@ -438,7 +440,7 @@
         if (!res.ok){ throw new Error('request failed'); }
         const data = await res.json(); let url = data.asset_url || (data.video_uris && data.video_uris[0]) || '';
         if (url.startsWith('gs://')){ const m = url.match(/^gs:\/\/([^\/]+)\/(.+)$/); if (m){ url = `https://storage.googleapis.com/${m[1]}/${m[2]}`; } }
-        holder.innerHTML = `<video src="${url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
+        holder.innerHTML = `<video src="${url}" class="max-w-full rounded-lg border border-gray-100 shadow-sm" preload="metadata" controls></video>`;
         if (data.gallery_id){
           const del = document.createElement('button'); del.textContent='×'; del.title='削除'; del.className='absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick=()=> deleteAsset(data.gallery_id, holder); holder.appendChild(del);
         }
@@ -481,7 +483,7 @@
         const p = paraById.get(pid); // 静的HTML運用時はparaByIdが未設定のためDOMから取得
         const dom = paraElById.get(pid);
         const btn = document.createElement('button');
-        btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded border border-gray-200 my-1';
+        btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded-lg border border-gray-200 my-1';
         const head = ((p?.text)|| (dom?.querySelector('.leading-relaxed')?.textContent || '')).replaceAll('\n',' ').slice(0,20);
         btn.textContent = `${head}${(p?.text||'').length>20?'…':''}`;
         btn.onclick = ()=>{ modal.close(); paraElById.get(pid)?.scrollIntoView({behavior:'smooth', block:'center'}); };
@@ -498,46 +500,55 @@
   </script>
 </head>
 <body>
-  <header class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-3 py-2 flex items-center gap-2" style="--header-h: 48px;">
-    <a href="/web/search.html" class="text-sky-700 shrink-0">← 戻る</a>
+  <header class="sticky top-0 z-20 bg-white/90 backdrop-blur h-14 border-b border-gray-100 shadow-sm px-4 flex items-center gap-3" style="--header-h: 56px;">
+    <a href="/web/search.html" aria-label="戻る" class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 transition shrink-0">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5"/></svg>
+      <span class="hidden sm:inline">戻る</span>
+    </a>
     <div class="flex-1 flex items-center gap-2 min-w-0">
       <div id="title" class="font-semibold truncate"></div>
       <div id="author" class="text-gray-500 text-sm truncate"></div>
     </div>
-    <button id="chat-toggle-header" class="text-sm text-sky-700 shrink-0" onclick="toggleChat()">チャットを開く</button>
+    <button id="chat-toggle-header" class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 text-sm shrink-0 lg:hidden" onclick="toggleChat()">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M7 8h10M7 12h6M5 20l3.5-3H17a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v14z"/></svg>
+      <span id="chat-toggle-label">チャットを開く</span>
+    </button>
   </header>
-  <main class="container mx-auto">
+  <main class="container mx-auto max-w-screen-xl">
   <div class="p-4 grid grid-cols-10 gap-4">
     <!-- 本文（6） -->
     <div id="left-col" class="col-span-10 lg:col-span-6 pb-24">
-      <div id="paras">読み込み中…</div>
+      <div id="paras" class="max-w-[70ch] mx-auto space-y-3">
+        <div class="skeleton h-5 w-[85%]"></div>
+        <div class="skeleton h-5 w-[92%]"></div>
+        <div class="skeleton h-5 w-[78%]"></div>
+      </div>
       <!-- 左カラム内・下部固定（sticky）アクションバー -->
-      <div class="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur z-10 mt-4 py-2 pb-safe">
+      <div class="sticky bottom-0 border-t border-gray-100 bg-white/95 supports-[backdrop-filter]:bg-white/85 backdrop-blur-sm z-10 mt-4 py-2 pb-safe shadow-[0_-1px_10px_rgba(0,0,0,.04)]">
         <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2">
-          <button id="btn-hl" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="saveHighlight()" disabled>ハイライトする</button>
-          <button id="btn-trans" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="doTranslate()" disabled>ここだけ翻訳</button>
-          <button id="btn-img" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="generateImage()" disabled>挿絵を生成</button>
-          <button id="btn-vid" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded disabled:opacity-40" onclick="generateVideo()" disabled>動く挿絵を生成</button>
+          <button id="btn-hl" class="h-9 px-3 text-sm rounded-lg bg-sky-500 text-white hover:bg-sky-600 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="saveHighlight()" disabled>ハイライトする</button>
+          <button id="btn-trans" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="doTranslate()" disabled>ここだけ翻訳</button>
+          <button id="btn-img" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="generateImage()" disabled>挿絵を生成</button>
+          <button id="btn-vid" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition disabled:opacity-40 disabled:cursor-not-allowed" onclick="generateVideo()" disabled>動く挿絵を生成</button>
           <div class="sm:ml-auto col-span-2 sm:col-span-auto justify-self-end">
-            <button id="btn-jump" class="px-2 py-1.5 text-[13px] sm:text-sm border border-gray-300 rounded" onclick="openJumpModal()">ハイライトに移動</button>
+            <button id="btn-jump" class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition" onclick="openJumpModal()">ハイライトに移動</button>
           </div>
         </div>
       </div>
       <div class="my-6">
-        <button class="px-4 py-2 rounded bg-sky-500 text-white" onclick="openCompleteModal()">読了</button>
+        <button class="px-4 py-2 rounded-lg bg-sky-500 hover:bg-sky-600 text-white shadow-sm transition" onclick="openCompleteModal()">読了</button>
       </div>
       <div class="h-16"></div>
     </div>
 
     <!-- チャット（4） -->
     <div id="chat-col" class="hidden lg:block col-span-10 lg:col-span-4">
-      <div id="chat-panel" class="border border-gray-200 rounded-lg box-border sticky h-chat" style="top: var(--header-h, 64px);">
+      <div id="chat-panel" class="border border-gray-100 rounded-xl shadow-sm box-border sticky h-chat" style="top: var(--header-h, 64px);">
         <div class="h-full min-h-0 flex flex-col">
-          <div class="p-2 border-b border-gray-200 hidden lg:flex justify-between items-center">
+          <div class="p-2 border-b border-gray-200 bg-gray-50/60 hidden lg:flex justify-between items-center">
             <div class="text-sm text-gray-600">チャット</div>
             <div class="flex items-center gap-3">
               <button class="hidden lg:inline text-sm text-gray-600 hover:text-gray-800" onclick="resetChatHistory()">履歴クリア</button>
-              <button class="hidden lg:inline-block text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
             </div>
           </div>
           <div id="chat-log" class="flex-1 min-h-0 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
@@ -545,8 +556,8 @@
           <div class="border-t border-gray-200 p-2 pb-safe space-y-2">
             <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
             <div class="flex gap-2">
-              <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){doQA()}" />
-              <button id="qa-send" onclick="doQA()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
+              <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-200 rounded-lg px-3 h-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300" onkeydown="if(event.key==='Enter'){doQA()}" />
+              <button id="qa-send" onclick="doQA()" class="bg-sky-500 hover:bg-sky-600 text-white rounded-lg h-10 px-4 transition">送信</button>
             </div>
           </div>
         </div>
@@ -570,8 +581,8 @@
       <div class="text-lg font-semibold">お疲れ様でした！感想を書いてみませんか？</div>
       <textarea id="complete-text" class="w-full h-40 border border-gray-300 rounded p-2" placeholder="感想を入力（任意）"></textarea>
       <div class="flex justify-end gap-2">
-        <button class="px-3 py-1 border rounded" onclick="document.getElementById('complete-modal').close()">後で</button>
-        <button id="complete-save" class="px-3 py-1 bg-sky-500 text-white rounded">保存して閉じる</button>
+        <button class="px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50" onclick="document.getElementById('complete-modal').close()">後で</button>
+        <button id="complete-save" class="px-3 py-1 bg-sky-500 hover:bg-sky-600 text-white rounded-lg">保存して閉じる</button>
       </div>
     </div>
   </dialog>
@@ -590,10 +601,10 @@
       if (!isLg()) { openChatOverlay(); return; }
       const chat = document.getElementById('chat-col');
       const left = document.getElementById('left-col');
-      const headerBtn = document.getElementById('chat-toggle-header');
+      const headerLabel = document.getElementById('chat-toggle-label');
       const hidden = chat.classList.contains('hidden');
-      if (hidden){ chat.classList.remove('hidden'); left.classList.remove('lg:col-span-10'); left.classList.add('lg:col-span-6'); if (headerBtn) headerBtn.textContent = 'チャットを隠す'; }
-      else { chat.classList.add('hidden'); left.classList.remove('lg:col-span-6'); left.classList.add('lg:col-span-10'); if (headerBtn) headerBtn.textContent = 'チャットを表示'; }
+      if (hidden){ chat.classList.remove('hidden'); left.classList.remove('lg:col-span-10'); left.classList.add('lg:col-span-6'); if (headerLabel) headerLabel.textContent = 'チャットを隠す'; }
+      else { chat.classList.add('hidden'); left.classList.remove('lg:col-span-6'); left.classList.add('lg:col-span-10'); if (headerLabel) headerLabel.textContent = 'チャットを表示'; }
     }
     function openChatOverlay(){
       const dlg = document.getElementById('chat-overlay');
@@ -617,9 +628,9 @@
     }
     // 画面幅の変化でヘッダーボタン文言とパネルの状態を調整
     (function(){
-      const headerBtn = document.getElementById('chat-toggle-header');
+      const headerLabel = document.getElementById('chat-toggle-label');
       const mql = window.matchMedia('(min-width: 1024px)');
-      const apply = ()=>{ if (headerBtn) headerBtn.textContent = mql.matches ? 'チャットを隠す' : 'チャットを開く'; };
+      const apply = ()=>{ if (headerLabel) headerLabel.textContent = mql.matches ? 'チャットを隠す' : 'チャットを開く'; };
       apply(); mql.addEventListener('change', apply);
     })();
     function openCompleteModal(){
