@@ -2,11 +2,11 @@
 
 /* 100dvh対応（iOS等でのvhズレ対策） */
 .h-chat {
-  height: calc(100vh - 64px - 12px);
+  height: calc(100vh - var(--header-h, 64px) - 12px);
 }
 @supports (height: 100dvh) {
   .h-chat {
-    height: calc(100dvh - 64px - 12px);
+    height: calc(100dvh - var(--header-h, 64px) - 12px);
   }
 }
 
@@ -21,3 +21,34 @@
   overflow: auto;
 }
 
+/* dialogを完全に全画面化（UAデフォルトのmargin/位置決めを打ち消す） */
+.dialog-full {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  width: 100vw;
+  height: calc(100dvh - env(safe-area-inset-bottom, 0px));
+  max-height: calc(100dvh - env(safe-area-inset-bottom, 0px));
+  top: 0;
+  left: 0;
+  overflow: hidden;
+}
+/* オーバーレイ内では追加の下余白を無効化して全体高さと釣り合わせる */
+.dialog-full .pb-safe { padding-bottom: 0; }
+
+/* オーバーレイ時のチャットパネルを右寄せ・幅制限 */
+.dialog-full #chat-panel {
+  margin-left: auto;           /* 右寄せ */
+  width: 100%;                 /* モバイルは全幅 */
+  max-width: 560px;            /* 広い画面でも読みやすい幅に制限 */
+  height: 100%;                /* 入力欄を下に固定しつつ全高に伸長 */
+  border-radius: 0;            /* 枠角をまっすぐに */
+}
+
+/* チャット送信ボタン（応答待ち中の色変更） */
+#chat-send:disabled,
+#qa-send:disabled {
+  background-color: #9ca3af !important; /* bg-gray-400 */
+  color: #ffffff !important;
+  cursor: not-allowed !important;
+}

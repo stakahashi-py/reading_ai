@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>読む</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="/web/styles.css" />
@@ -44,8 +44,7 @@
     const highlightsByPara = new Map(); // para_id -> highlight {id,...}
     const paraElById = new Map();
     const paraById = new Map();
-    let offset = 0; const limit = 50; let loading=false; let total=0;
-    let restorePercent = null; let restoreIdx = null; let restored=false;
+    let offset = 0; const limit = 200; let loading=false; let total=0;
     // QAチャット履歴（サーバーに送る前提の最小フォーマット）
     const chatHistory = []; // [{role:'user'|'assistant', content:string}]
 
@@ -53,13 +52,8 @@
       const meta = await (await fetch(`/v1/books/${bookId}`)).json();
       document.getElementById('title').textContent = meta.title || 'Untitled';
       document.getElementById('author').textContent = meta.author || '';
-      try {
-        const pr = await (await fetch(`/v1/progress?book_id=${bookId}`)).json();
-        restorePercent = (typeof pr.scroll_percent === 'number') ? pr.scroll_percent : null;
-        if (typeof pr.last_paragraph_index === 'number') restoreIdx = pr.last_paragraph_index;
-      } catch (e) { restorePercent = null; restoreIdx = null; }
       document.getElementById('paras').innerHTML = '';
-      offset = 0; total = 0; restored=false; await loadMore();
+      offset = 0; total = 0; await loadMore();
       // 既存ハイライトを復元
       try{
         const r = await fetch(`/v1/highlights?book_id=${bookId}`);
@@ -152,14 +146,27 @@
       }
     }
 
+    let qaBusy = false;
+    function setQaBusy(busy){
+      const btn = document.getElementById('qa-send');
+      if (!btn) return; btn.disabled = busy;
+      btn.classList.toggle('bg-sky-500', !busy);
+      btn.classList.toggle('bg-gray-400', busy);
+      btn.classList.toggle('cursor-not-allowed', busy);
+      btn.classList.toggle('opacity-70', busy);
+    }
     async function doQA(){
+      if (qaBusy) return;
       const q = document.getElementById('chat-input').value.trim();
       if(!q){ return; }
+      const inp = document.getElementById('chat-input');
+      const btn = document.getElementById('qa-send');
       const past = chatHistory.slice(); // 直前までの履歴をサーバーへ
       appendChat('user', q.replaceAll('\n','<br/>'));
       chatHistory.push({role:'user', content: q});
       document.getElementById('chat-input').value = '';
       setTyping(true);
+      qaBusy = true; setQaBusy(true); if (inp) inp.disabled = true;
       const box = document.getElementById('chat-log');
       const wrap = document.createElement('div'); wrap.className = 'flex justify-start my-2';
       const bubble = document.createElement('div'); bubble.className = 'max-w-[92%] sm:max-w-[80%] rounded-2xl px-3 py-2 text-sm bg-gray-100 text-gray-800'; wrap.appendChild(bubble); box.appendChild(wrap);
@@ -190,6 +197,7 @@
         bubble.textContent = '回答に失敗しました';
       } finally {
         setTyping(false);
+        qaBusy = false; setQaBusy(false); if (inp) inp.disabled = false; inp.focus();
       }
     }
 
@@ -248,6 +256,7 @@
       const data = await res.json();
       total = data.total || 0;
       const list = document.getElementById('paras');
+      const frag = document.createDocumentFragment();
       for (const p of data.items || []) {
         paraById.set(p.id, p);
         const el = document.createElement('div');
@@ -255,7 +264,7 @@
         el.dataset.paraId = p.id; el.dataset.idx = p.idx;
         el.innerHTML = `<div class="leading-relaxed">${p.text.replaceAll('\n','<br/>')}</div>`;
         el.addEventListener('click', ()=> toggleSelect(p));
-        list.appendChild(el); paraElById.set(p.id, el);
+        frag.appendChild(el); paraElById.set(p.id, el);
         // 翻訳のローカル復元
         const cached = localStorage.getItem(`tr:${bookId}:${p.id}`);
         if (cached){
@@ -265,6 +274,7 @@
           document.getElementById(`trans-text-${p.id}`).textContent = cached;
         }
       }
+      list.appendChild(frag);
       offset += (data.items || []).length;
       loading=false;
       // defer scroll restore; final adjust will run after initial enrich (translations/gallery)
@@ -274,13 +284,15 @@
       const sc = document.documentElement.scrollTop || document.body.scrollTop;
       const sh = document.documentElement.scrollHeight || document.body.scrollHeight;
       const ch = document.documentElement.clientHeight || window.innerHeight;
-      const percent = Math.min(100, Math.round((sc/(sh-ch))*100));
+      const denom = Math.max(1, (sh - ch));
+      const percent = Math.min(100, Math.max(0, Math.round((sc/denom)*100)));
       maybeSaveProgress(percent);
       if (!loading && offset < total && (sh - (sc + ch) < 300)) {
         loadMore();
       }
     }
 
+    // 進捗保存（読書中ステータスに利用）
     let lastSaved = -1; let saveTimer=null;
     function firstVisibleIdx(){
       const paras = document.querySelectorAll('.para');
@@ -299,25 +311,13 @@
       saveTimer = setTimeout(async ()=>{
         lastSaved = percent;
         const idx = firstVisibleIdx();
-        await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent, last_paragraph_index: idx})});
+        try{
+          await fetch('/v1/progress', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({book_id: bookId, scroll_percent: percent, last_paragraph_index: idx})});
+        }catch(_){}
       }, 500);
     }
 
-    async function restoreToIdxOnce(){
-      if (restored) return;
-      let targetIdx = null;
-      if (restoreIdx != null) targetIdx = restoreIdx;
-      else if (restorePercent != null && total) targetIdx = Math.max(0, Math.floor((total * restorePercent) / 100) - 2);
-      if (targetIdx == null) { restored = true; return; }
-      while (offset <= targetIdx && offset < total){ await loadMore(); }
-      setTimeout(()=>{
-        const el = document.querySelector(`[data-idx="${targetIdx}"]`);
-        if (el){ el.scrollIntoView({behavior:'instant', block:'start'}); }
-        restored = true;
-      }, 0);
-    }
-
-    window.addEventListener('DOMContentLoaded', ()=>{ loadBook().then(()=>restoreToIdxOnce()); window.addEventListener('scroll', onScroll, {passive:true}); appendChat('assistant','本に関する疑問をどうぞ。'); });
+    window.addEventListener('DOMContentLoaded', ()=>{ loadBook(); window.addEventListener('scroll', onScroll, {passive:true}); appendChat('assistant','本に関する疑問をどうぞ。'); });
 
     async function generateVideo(){
       const sels = Array.from(selected.values()); if(!sels.length){ alert('段落を選択してください'); return; }
@@ -394,13 +394,13 @@
   </script>
 </head>
 <body>
-  <header class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
-    <a href="/web/search.html" class="text-sky-700">← 戻る</a>
-    <div class="flex-1">
-      <div id="title" class="font-semibold"></div>
-      <div id="author" class="text-gray-500 text-sm"></div>
+  <header class="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-3 py-2 flex items-center gap-2" style="--header-h: 48px;">
+    <a href="/web/search.html" class="text-sky-700 shrink-0">← 戻る</a>
+    <div class="flex-1 flex items-center gap-2 min-w-0">
+      <div id="title" class="font-semibold truncate"></div>
+      <div id="author" class="text-gray-500 text-sm truncate"></div>
     </div>
-    <button id="chat-toggle-header" class="text-sm text-sky-700" onclick="toggleChat()">チャットを隠す</button>
+    <button id="chat-toggle-header" class="text-sm text-sky-700 shrink-0" onclick="toggleChat()">チャットを開く</button>
   </header>
   <main class="container mx-auto">
   <div class="p-4 grid grid-cols-10 gap-4">
@@ -427,22 +427,22 @@
 
     <!-- チャット（4） -->
     <div id="chat-col" class="hidden lg:block col-span-10 lg:col-span-4">
-      <div id="chat-panel" class="border border-gray-200 rounded-lg sticky h-chat" style="top:64px;">
-        <div class="h-full flex flex-col">
-          <div class="p-2 border-b border-gray-200 flex justify-between items-center">
+      <div id="chat-panel" class="border border-gray-200 rounded-lg box-border sticky h-chat" style="top: var(--header-h, 64px);">
+        <div class="h-full min-h-0 flex flex-col">
+          <div class="p-2 border-b border-gray-200 hidden lg:flex justify-between items-center">
             <div class="text-sm text-gray-600">チャット</div>
             <div class="flex items-center gap-3">
-              <button class="text-sm text-gray-600 hover:text-gray-800" onclick="resetChatHistory()">履歴クリア</button>
-              <button class="text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
+              <button class="hidden lg:inline text-sm text-gray-600 hover:text-gray-800" onclick="resetChatHistory()">履歴クリア</button>
+              <button class="hidden lg:inline-block text-sm text-sky-700" onclick="toggleChat()">閉じる</button>
             </div>
           </div>
-          <div id="chat-log" class="flex-1 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
+          <div id="chat-log" class="flex-1 min-h-0 overflow-auto p-3 space-y-2" role="log" aria-live="polite"></div>
           <!-- 入力中インジケータは非表示に変更（冗長なため） -->
           <div class="border-t border-gray-200 p-2 pb-safe space-y-2">
             <div id="sel-cards" class="flex gap-2 overflow-x-auto"></div>
             <div class="flex gap-2">
               <input id="chat-input" placeholder="本文について質問…" class="flex-1 border border-gray-300 rounded px-3 py-2" onkeydown="if(event.key==='Enter'){doQA()}" />
-              <button onclick="doQA()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
+              <button id="qa-send" onclick="doQA()" class="bg-sky-500 text-white rounded px-4 py-2">送信</button>
             </div>
           </div>
         </div>
@@ -472,13 +472,12 @@
     </div>
   </dialog>
   <!-- モバイル用：全画面チャットオーバーレイ -->
-  <dialog id="chat-overlay" class="w-[100vw] h-[100dvh] p-0">
-    <div class="h-[100dvh] flex flex-col">
-      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-        <div class="text-sm text-gray-600">チャット</div>
+  <dialog id="chat-overlay" class="dialog-full">
+    <div class="h-[100dvh] flex flex-col min-h-0">
+      <div class="px-2 py-1 border-b border-gray-200 flex items-center justify-end">
         <button class="text-sm text-sky-700" onclick="closeChatOverlay()">閉じる</button>
       </div>
-      <div id="chat-overlay-body" class="flex-1 overflow-hidden"></div>
+      <div id="chat-overlay-body" class="flex-1 overflow-hidden min-h-0"></div>
     </div>
   </dialog>
   <script>
@@ -497,7 +496,7 @@
       const body = document.getElementById('chat-overlay-body');
       const panel = document.getElementById('chat-panel');
       if (!dlg || !body || !panel) return;
-      panel.classList.remove('sticky','h-chat'); panel.style.top='';
+      panel.classList.remove('sticky','h-chat'); panel.classList.add('h-full'); panel.style.top='';
       body.appendChild(panel);
       dlg.showModal();
     }
@@ -508,7 +507,8 @@
       const chatCol = document.getElementById('chat-col');
       if (!dlg || !body || !panel || !chatCol) return;
       chatCol.appendChild(panel);
-      if (isLg()){ panel.classList.add('sticky','h-chat'); panel.style.top='64px'; }
+      panel.classList.remove('h-full');
+      if (isLg()){ panel.classList.add('sticky','h-chat'); panel.style.top='var(--header-h, 64px)'; }
       dlg.close();
     }
     // 画面幅の変化でヘッダーボタン文言とパネルの状態を調整
