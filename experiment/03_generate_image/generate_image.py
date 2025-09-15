@@ -20,28 +20,39 @@ client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
 exp_02_num = "7"  # experiment/02_generate_characters_image/prompts/内、最も良かったプロンプトの番号
 
 
-class CharacterNames(BaseModel):
-    names: list[str]
+class CheckCharactersOutput(BaseModel):
+    prompt: str
+    character_names: list[str]
 
 
 def check_characters(title, text, character_names):
     # Geminiを用いて登場人物を抽出
     system = (
-        f"「{title}」の一部本文が与えられます。その中に登場する人物を特定し、JSON形式で返してください。\n"
-        "- 「# 登場人物ホワイトリスト」に記載のある名前のみを候補としてください。それ以外の登場人物は出力しないでください。\n"
+        f"「{title}」の一部本文が与えられます。そのシーンを画像化するためのプロンプトと、その中に登場する人物名を、JSON形式で返してください。\n"
+        "# 制約条件:\n"
+        "- 画像化のためのプロンプトは、英語で出力してください。"
+        "- 本文中の要素を、すべてプロンプトに盛り込む必要はありません。印象的なシーンを選び、簡潔に表現してください。\n"
+        "- 本文に文脈的な情報が不足する場合でも、本文がどういった場面かを推測してプロンプトに盛り込んでください。\n"
+        "- 登場する人物名は、「# 登場人物ホワイトリスト」に記載のある名前のみを候補としてください。それ以外の登場人物がシーンに含まれる場合は、'others'の値を1つだけ、リストに含めてください。\n"
         f"# 本文:\n{text}"
         f"# 登場人物ホワイトリスト:\n{character_names}\n"
     )
     resp = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-2.5-pro",
         contents=system,
         config={
             "response_mime_type": "application/json",
-            "response_schema": CharacterNames,
+            "response_schema": CheckCharactersOutput,
             "temperature": 0.05,
         },
     )
-    return resp.text
+    resp_json = json.loads(resp.text)
+    image_prompt = resp_json.get("prompt")
+    checked_character_names = resp_json.get("character_names")
+    if "others" in checked_character_names:
+        checked_character_names.remove("others")
+    print(image_prompt, checked_character_names)
+    return image_prompt, checked_character_names
 
 
 def generate_image(title, content, character_names, exp_num):
@@ -128,19 +139,14 @@ def main():
         for text in texts:
             print(f"タイトル: {title}")
             print(f"本文: {text[:30]}...")
-            checked_names_json = check_characters(title, text, character_names)
-            try:
-                checked_names = json.loads(checked_names_json)["names"]
-            except Exception as e:
-                print(f"登場人物の抽出に失敗しました: {e}")
-                continue
+            image_prompt, checked_names = check_characters(title, text, character_names)
             # if not checked_names:
             #     print(f"本文に登場する人物が見つかりません: {title}")
             #     continue
             print(f"抽出された登場人物: {checked_names}")
             retry_count = 0
             while retry_count < 3:
-                flg = generate_image(title, text, checked_names, exp_num)
+                flg = generate_image(title, image_prompt, checked_names, exp_num)
                 if flg:
                     break
                 retry_count += 1

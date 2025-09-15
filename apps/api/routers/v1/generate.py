@@ -67,15 +67,21 @@ def _upload_to_gcs(local_path, bucket_name, gcs_path):
     print(f"Uploaded to gs://{bucket_name}/{gcs_path}")
 
 
-class CharacterNames(BaseModel):
-    names: list[str]
+class CheckCharactersOutput(BaseModel):
+    prompt: str
+    character_names: list[str]
 
 
 def _check_characters(title, text, character_names):
     # Geminiを用いて登場人物を抽出
     system = (
-        f"「{title}」の一部本文が与えられます。その中に登場する人物を特定し、JSON形式で返してください。\n"
-        "- 「# 登場人物ホワイトリスト」に記載のある名前のみを候補としてください。それ以外の登場人物は出力しないでください。\n"
+        f"「{title}」の一部本文が与えられます。そのシーンを画像化するためのプロンプトと、その中に登場する人物名を、JSON形式で返してください。\n"
+        "# 制約条件:\n"
+        "- 画像化のためのプロンプトは、英語で出力してください。"
+        "- 本文中の要素を、すべてプロンプトに盛り込む必要はありません。印象的なシーンを選び、簡潔に表現してください。\n"
+        "- 本文に文脈的な情報が不足する場合でも、本文がどういった場面かを推測してプロンプトに盛り込んでください。\n"
+        "- プロンプトには、「誰が」何をしているか、キャラクター名を明示してください。"
+        "- 登場する人物名は、「# 登場人物ホワイトリスト」に記載のある名前のみを候補としてください。それ以外の登場人物がシーンに含まれる場合は、'others'の値を1つだけ、リストに含めてください。\n"
         f"# 本文:\n{text}"
         f"# 登場人物ホワイトリスト:\n{character_names}\n"
     )
@@ -83,21 +89,26 @@ def _check_characters(title, text, character_names):
     while retry_count < 3:
         try:
             resp = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=system,
                 config={
                     "response_mime_type": "application/json",
-                    "response_schema": CharacterNames,
+                    "response_schema": CheckCharactersOutput,
                     "temperature": 0.05,
                 },
             )
-            checked_character_names = json.loads(resp.text).get("names")
+            resp_json = json.loads(resp.text)
+            image_prompt = resp_json.get("prompt")
+            checked_character_names = resp_json.get("character_names")
+            if "others" in checked_character_names:
+                checked_character_names.remove("others")
             break
         except Exception as e:
             print(f"登場人物の抽出に失敗しました: {e}")
             retry_count += 1
             checked_character_names = []
-    return checked_character_names
+    print(image_prompt, checked_character_names)
+    return image_prompt, checked_character_names
 
 
 def _generate_image_nano_banana(
@@ -275,18 +286,20 @@ def generate_image(
     characters_json = row["characters"]
     character_names = [c["name"] for c in characters_json]
     # 出現キャラチェック
-    checked_character_names = _check_characters(title, source, character_names)
+    image_prompt, checked_character_names = _check_characters(
+        title, source, character_names
+    )
     prompt_template = """Please generate an illustration of the following scene from the novel 「{title}」
 - {content}
 
 # Notes
-- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a single illustration of it.
-- Do not include any text in the output. character appearance, please follow the provided images.
+- Do not include any text in the output.
+- If the following characters appear, please follow the provided images for their appearance.
 {characters}
-- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
+- In the style of a novel illustration: monochrome or soft colors, delicate linework with gentle shading, and a calm, literary, and lyrical atmosphere.
 """
     img_path, _ = _generate_image_nano_banana(
-        title, source, checked_character_names, prompt_template
+        title, image_prompt, checked_character_names, prompt_template
     )
     # GCSにアップロード
     _upload_to_gcs(img_path, ASSETS_BUCKET, f"imagen/{os.path.basename(img_path)}")
@@ -335,7 +348,9 @@ def generate_video(
     characters_json = row["characters"]
     character_names = [c["name"] for c in characters_json]
     # 出現キャラチェック
-    checked_character_names = _check_characters(title, source, character_names)
+    image_prompt, checked_character_names = _check_characters(
+        title, source, character_names
+    )
     prompt_template = """Generate a prompt for creating a video of the following scene, and also generate an image for the beginning of the video.
 title: {title}
 scene: {content}
@@ -343,17 +358,20 @@ scene: {content}
 # Notes
 - Only output the prompt and an image for the beginning of the video, do not output any other text.
 - Output the prompt in English.
-- You don’t need to illustrate all the input scenes. From the given scenes, select only one impressive moment and make a simple and concise prompt.
-- Do not include any text in the image. Character appearance, please follow the provided images.
+- Do not include any text in the image.
+- If the following characters appear, please follow the provided images for their appearance.
 {characters}
-- If characters appear who are not included in the provided images, generate them in a style consistent with the other characters, using your own interpretation.
 - Describe human subjects using age-neutral terms like 'person' or 'figure' to avoid contents filtering issues.
 """
     retry_count = 0
     while retry_count < 3:
         try:
             img_path, veo_prompt = _generate_image_nano_banana(
-                title, source, checked_character_names, prompt_template, need_text=True
+                title,
+                image_prompt,
+                checked_character_names,
+                prompt_template,
+                need_text=True,
             )
             print(img_path, veo_prompt.strip())
             result = _veo_generate_and_wait(
