@@ -107,14 +107,17 @@ def append_citation(html_path, citation):
     if "底本：" in txt:
         # すでにある場合、既存のHTMLの最後のdivを新しい底本に置き換えるため削除
         target.clear()
+        path.write_text(str(soup), encoding="utf-8")
 
     # 追記
-    new_div = soup.new_tag("div")
-    new_div.string = citation
-    target.parent.append(new_div)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(
+            f"<div class=\"para rounded hover:bg-gray-50 p-2\">\n<div>\n{citation.replace('\n', '<br>')}\n</div>\n</div>\n"
+        )
+    # new_div = soup.new_tag("div")
+    # new_div.string = citation
+    # target.parent.append(new_div)
 
-    # 保存
-    path.write_text(str(soup), encoding="utf-8")
     return True
 
 
