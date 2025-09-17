@@ -103,45 +103,6 @@
         list.innerHTML = '<div class="text-sm text-gray-500">本文の静的HTMLが見つかりませんでした。</div>';
       }
       await restoreUserArtifacts();
-      // 既存ハイライトを復元（旧ロジック互換のため残置）
-      try {
-        const r = await fetch(`/v1/highlights?book_id=${bookId}`);
-        const data = await r.json();
-        for (const h of (data.items || [])) { highlightsByPara.set(h.para_id, h); markHighlighted(h.para_id, true); }
-      } catch (e) { }
-      // 翻訳・ギャラリーの復元（旧ロジック互換のため残置）
-      try {
-        const tr = await (await fetch(`/v1/translations?book_id=${bookId}`)).json();
-        for (const t of (tr.items || [])) {
-          const p = paraElById.get(t.para_id);
-          if (p) {
-            const el = document.getElementById(`trans-${t.para_id}`) || (function () {
-              const d = document.createElement('div'); d.id = `trans-${t.para_id}`; d.className = 'mt-2 border border-pink-100 bg-pink-50 rounded';
-              d.innerHTML = `<div class="text-[11px] text-pink-700 px-2 pt-1">翻訳結果</div><div class="px-2 pb-2 text-sm" id="trans-text-${t.para_id}"></div>`;
-              p.appendChild(d); return d;
-            })();
-            const tx = document.getElementById(`trans-text-${t.para_id}`); if (tx) tx.textContent = t.text || '';
-            try { localStorage.setItem(`tr:${bookId}:${t.para_id}`, t.text || ''); } catch (_) { }
-          }
-        }
-      } catch (e) { }
-      try {
-        const gl = await (await fetch(`/v1/gallery?book_id=${bookId}`)).json();
-        for (const g of (gl.items || [])) {
-          const pids = (((g.meta || {}).paragraph_ids) || []).filter(x => typeof x === 'number');
-          const last = pids.length ? pids[pids.length - 1] : null;
-          const anchor = last ? paraElById.get(last) : document.getElementById('paras');
-          if (!anchor) continue;
-          const holder = document.createElement('div'); holder.className = 'my-3 relative group';
-          if (g.type === 'image') {
-            holder.innerHTML = `<img src="${g.asset_url}" class="max-w-full border border-gray-200 rounded"/>`;
-          } else if (g.type === 'video') {
-            holder.innerHTML = `<video src="${g.asset_url}" class="max-w-full border border-gray-200 rounded" controls></video>`;
-          }
-          const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(g.id, holder); holder.appendChild(del);
-          anchor.after(holder);
-        }
-      } catch (e) { }
     }
 
     async function tryLoadStatic(progress) {
