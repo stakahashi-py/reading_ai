@@ -75,6 +75,7 @@
     let bookSlug = '';
     const selected = new Map(); // para_id -> para
     const highlightsByPara = new Map(); // para_id -> highlight {id,...}
+    const galleryEntries = new Map(); // gallery_id -> { type, element, paraId, paragraphIds }
     const paraElById = new Map();
     const paraById = new Map();
     const paraIdByIdx = new Map();
@@ -93,6 +94,7 @@
       document.getElementById('title').textContent = meta.title || 'Untitled';
       document.getElementById('author').textContent = meta.author || '';
       document.getElementById('paras').innerHTML = '';
+      galleryEntries.clear();
       staticLoaded = await tryLoadStatic(progress);
       // 旧APIフォールバックは停止（静的HTML優先で固定）
       // if (!staticLoaded){
@@ -103,6 +105,51 @@
         list.innerHTML = '<div class="text-sm text-gray-500">本文の静的HTMLが見つかりませんでした。</div>';
       }
       await restoreUserArtifacts();
+    }
+
+    function registerGalleryEntry({ id, type, element, paragraphIds }) {
+      if (!id || !element) return;
+      const ids = Array.isArray(paragraphIds) ? paragraphIds.filter(x => typeof x === 'number') : [];
+      const lastParaId = ids.length ? ids[ids.length - 1] : null;
+      galleryEntries.set(id, { type: type === 'video' ? 'video' : 'image', element, paraId: lastParaId, paragraphIds: ids });
+    }
+
+    function unregisterGalleryEntry(id) {
+      if (!id) return;
+      galleryEntries.delete(id);
+    }
+
+    function compactSnippet(text) {
+      if (!text) return '';
+      const normalized = text.replace(/\s+/g, ' ').trim();
+      if (!normalized) return '';
+      return normalized.length > 20 ? `${normalized.slice(0, 20)}…` : normalized;
+    }
+
+    function getParaIndex(paraId) {
+      if (typeof paraId !== 'number') return null;
+      const el = paraElById.get(paraId);
+      if (el && el.dataset && el.dataset.idx != null) {
+        const idx = parseInt(el.dataset.idx, 10);
+        return Number.isFinite(idx) ? idx : null;
+      }
+      const meta = paraById.get(paraId);
+      if (meta && typeof meta.idx === 'number') return meta.idx;
+      return null;
+    }
+
+    function getSnippetFromPara(paraId) {
+      if (typeof paraId !== 'number') return '';
+      const para = paraById.get(paraId);
+      if (para && typeof para.text === 'string') {
+        return compactSnippet(para.text);
+      }
+      const dom = paraElById.get(paraId);
+      if (dom) {
+        const text = dom.querySelector('.leading-relaxed')?.textContent || dom.textContent || '';
+        return compactSnippet(text);
+      }
+      return '';
     }
 
     async function tryLoadStatic(progress) {
@@ -187,6 +234,7 @@
           }
           const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(g.id, holder); holder.appendChild(del);
           anchor.after(holder);
+          registerGalleryEntry({ id: g.id, type: g.type, element: holder, paragraphIds: pids });
         }
       } catch (e) { }
     }
@@ -345,6 +393,7 @@
         holder.innerHTML = `<img src="${url}" alt="generated" class="max-w-full rounded-lg border border-gray-100 shadow-sm" loading="lazy"/>`;
         if (data.gallery_id) {
           const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(data.gallery_id, holder); holder.appendChild(del);
+          registerGalleryEntry({ id: data.gallery_id, type: 'image', element: holder, paragraphIds: sels.map(x => x.id) });
         }
       } catch (e) { holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
       finally { imgController = null; }
@@ -439,6 +488,7 @@
         holder.innerHTML = `<video src="${url}" class="max-w-full rounded-lg border border-gray-100 shadow-sm" preload="metadata" controls></video>`;
         if (data.gallery_id) {
           const del = document.createElement('button'); del.textContent = '×'; del.title = '削除'; del.className = 'absolute -top-2 -right-2 hidden group-hover:block w-6 h-6 rounded-full bg-white/90 border text-gray-600'; del.onclick = () => deleteAsset(data.gallery_id, holder); holder.appendChild(del);
+          registerGalleryEntry({ id: data.gallery_id, type: 'video', element: holder, paragraphIds: sels.map(x => x.id) });
         }
       } catch (e) { holder.innerHTML = `<div class='text-sm text-red-600'>生成に失敗しました</div>`; }
       finally { vidController = null; }
@@ -472,25 +522,97 @@
     function openJumpModal() {
       const modal = document.getElementById('jump-modal');
       const list = document.getElementById('jump-list');
+      if (!modal || !list) return;
       list.innerHTML = '';
-      const arr = Array.from(highlightsByPara.entries());
-      if (!arr.length) { list.innerHTML = '<div class="text-sm text-gray-500">ハイライトはありません</div>'; }
-      for (const [pid, h] of arr) {
-        const p = paraById.get(pid); // 静的HTML運用時はparaByIdが未設定のためDOMから取得
-        const dom = paraElById.get(pid);
+
+      const entries = [];
+
+      for (const [pid] of highlightsByPara.entries()) {
+        const targetEl = paraElById.get(pid);
+        const snippet = getSnippetFromPara(pid) || '（本文なし）';
+        const order = getParaIndex(pid);
+        entries.push({
+          key: `hl-${pid}`,
+          type: 'highlight',
+          label: 'ハイライト',
+          snippet,
+          targetEl: targetEl,
+          paraId: pid,
+          order: typeof order === 'number' ? order : Number.POSITIVE_INFINITY
+        });
+      }
+
+      for (const [gid, info] of galleryEntries.entries()) {
+        const typeLabel = info.type === 'video' ? '動く挿絵' : '挿絵';
+        let snippet = '';
+        if (typeof info.paraId === 'number') {
+          snippet = getSnippetFromPara(info.paraId);
+        }
+        if (!snippet && Array.isArray(info.paragraphIds)) {
+          for (const pid of info.paragraphIds) {
+            snippet = getSnippetFromPara(pid);
+            if (snippet) break;
+          }
+        }
+        if (!snippet) { snippet = typeLabel; }
+        const idxCandidates = [];
+        if (typeof info.paraId === 'number') {
+          const idx = getParaIndex(info.paraId);
+          if (typeof idx === 'number') idxCandidates.push(idx);
+        }
+        if (Array.isArray(info.paragraphIds)) {
+          for (const pid of info.paragraphIds) {
+            const idx = getParaIndex(pid);
+            if (typeof idx === 'number') idxCandidates.push(idx);
+          }
+        }
+        const order = idxCandidates.length ? Math.max(...idxCandidates) : Number.POSITIVE_INFINITY;
+        entries.push({
+          key: `gl-${gid}`,
+          type: info.type,
+          label: typeLabel,
+          snippet,
+          targetEl: info.element,
+          paraId: typeof info.paraId === 'number' ? info.paraId : null,
+          order
+        });
+      }
+
+      if (!entries.length) {
+        list.innerHTML = '<div class="text-sm text-gray-500">ハイライトや挿絵はまだありません</div>';
+        modal.showModal();
+        return;
+      }
+
+      entries.sort((a, b) => {
+        if (a.order === b.order) { return a.key.localeCompare(b.key); }
+        return a.order - b.order;
+      });
+
+      for (const entry of entries) {
         const btn = document.createElement('button');
         btn.className = 'w-full text-left px-3 py-2 hover:bg-gray-50 rounded-lg border border-gray-200 my-1';
-        const head = ((p?.text) || (dom?.querySelector('.leading-relaxed')?.textContent || '')).replaceAll('\n', ' ').slice(0, 20);
-        btn.textContent = `${head}${(p?.text || '').length > 20 ? '…' : ''}`;
-        btn.onclick = () => { modal.close(); paraElById.get(pid)?.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
+        const label = document.createElement('div'); label.className = 'text-xs text-gray-500'; label.textContent = entry.label;
+        const body = document.createElement('div'); body.className = 'text-sm text-gray-700'; body.textContent = entry.snippet || '（本文なし）';
+        btn.appendChild(label);
+        btn.appendChild(body);
+        btn.onclick = () => {
+          modal.close();
+          const el = entry.targetEl || (typeof entry.paraId === 'number' ? paraElById.get(entry.paraId) : null);
+          if (el && typeof el.scrollIntoView === 'function') {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        };
         list.appendChild(btn);
       }
+
       modal.showModal();
     }
 
     async function deleteAsset(galleryId, holder) {
       // 先に即座にDOMから除去して体感を速く
       if (holder && holder.parentNode) holder.parentNode.removeChild(holder);
+      unregisterGalleryEntry(galleryId);
       try { fetch(`/v1/gallery/${galleryId}`, { method: 'DELETE' }).catch(() => { }); } catch (e) { }
     }
   </script>
@@ -551,7 +673,7 @@
             <div class="sm:ml-auto col-span-2 sm:col-span-auto justify-self-end">
               <button id="btn-jump"
                 class="h-9 px-3 text-sm rounded-lg border border-gray-200 hover:bg-gray-50 transition"
-                onclick="openJumpModal()">ハイライトに移動</button>
+                onclick="openJumpModal()">ハイライト・挿絵に移動</button>
             </div>
           </div>
         </div>
@@ -597,7 +719,7 @@
 
   <dialog id="jump-modal" class="rounded max-w-xl w-[90vw]">
     <div class="p-4 modal-body-limit">
-      <div class="text-lg font-semibold mb-2">ハイライト一覧</div>
+      <div class="text-lg font-semibold mb-2">ハイライト・挿絵一覧</div>
       <div id="jump-list" class="max-h-[60vh] overflow-auto"></div>
       <div class="text-right mt-3"><button class="px-3 py-1 border rounded"
           onclick="document.getElementById('jump-modal').close()">閉じる</button></div>
