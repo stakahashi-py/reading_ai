@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MasterpIece - ギャラリー</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/web/styles.css" />
+  <link rel="icon" href="/web/favicon.ico">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { accent: '#93c5fd' }
+        }
+      }
+    };
+  </script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
+  <script src="/web/auth.js"></script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+  </style>
+  <script>
+    const bookCache = new Map();
+
+    function compact(text) {
+      if (!text) return '';
+      const normalized = String(text).replace(/\s+/g, ' ').trim();
+      return normalized.length > 36 ? `${normalized.slice(0, 36)}…` : normalized;
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '';
+      const date = new Date(iso);
+      if (Number.isNaN(date.getTime())) return '';
+      return date.toLocaleString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function fetchBookMeta(bookId) {
+      if (bookCache.has(bookId)) return bookCache.get(bookId);
+      try {
+        const res = await fetch(`/v1/books/${bookId}`);
+        if (!res.ok) throw new Error('failed');
+        const data = await res.json();
+        const meta = {
+          id: data.id,
+          title: data.title || 'Untitled',
+          author: data.author || '',
+          era: data.era || '',
+        };
+        bookCache.set(bookId, meta);
+        return meta;
+      } catch (e) {
+        const fallback = { id: bookId, title: `作品ID: ${bookId}`, author: '', era: '' };
+        bookCache.set(bookId, fallback);
+        return fallback;
+      }
+    }
+
+    function createImageCard(item, onPreview) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'relative group border border-gray-100 rounded-lg overflow-hidden text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-300';
+      const img = document.createElement('img');
+      img.src = item.thumb_url || item.asset_url;
+      img.alt = item.prompt ? compact(item.prompt) : '挿絵';
+      img.loading = 'lazy';
+      img.className = 'w-full h-48 object-cover';
+      card.appendChild(img);
+
+      const meta = document.createElement('div');
+      meta.className = 'p-3 space-y-1';
+      const label = document.createElement('div'); label.className = 'text-xs font-semibold text-sky-600'; label.textContent = '挿絵';
+      const time = document.createElement('div'); time.className = 'text-xs text-gray-500'; time.textContent = formatDate(item.created_at);
+      const prompt = document.createElement('div'); prompt.className = 'text-sm text-gray-700 line-clamp-2'; prompt.textContent = item.prompt ? item.prompt : '';
+      meta.appendChild(label);
+      meta.appendChild(time);
+      if (item.prompt) meta.appendChild(prompt);
+      card.appendChild(meta);
+
+      card.addEventListener('click', () => onPreview(item));
+      return card;
+    }
+
+    function createVideoCard(item) {
+      const wrap = document.createElement('div');
+      wrap.className = 'border border-gray-100 rounded-lg overflow-hidden shadow-sm';
+      const video = document.createElement('video');
+      video.src = item.asset_url;
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+      video.className = 'w-full h-48 object-cover bg-black';
+      if (item.thumb_url) { video.poster = item.thumb_url; }
+      wrap.appendChild(video);
+
+      const meta = document.createElement('div');
+      meta.className = 'p-3 space-y-1';
+      const label = document.createElement('div'); label.className = 'text-xs font-semibold text-purple-600'; label.textContent = '動く挿絵';
+      const time = document.createElement('div'); time.className = 'text-xs text-gray-500'; time.textContent = formatDate(item.created_at);
+      const prompt = document.createElement('div'); prompt.className = 'text-sm text-gray-700 line-clamp-2'; prompt.textContent = item.prompt ? item.prompt : '';
+      meta.appendChild(label);
+      meta.appendChild(time);
+      if (item.prompt) meta.appendChild(prompt);
+      wrap.appendChild(meta);
+      return wrap;
+    }
+
+    function renderEmpty(root) {
+      root.innerHTML = '';
+      const box = document.createElement('div');
+      box.className = 'text-center text-gray-500 py-16';
+      box.innerHTML = '<div class="text-lg font-medium">ギャラリーはまだありません</div><div class="mt-2 text-sm">挿絵や動く挿絵を生成するとここに表示されます。</div>';
+      root.appendChild(box);
+    }
+
+    async function loadGallery() {
+      const status = document.getElementById('gallery-status');
+      const root = document.getElementById('gallery-sections');
+      status.textContent = '読み込み中…';
+      root.innerHTML = '';
+      try {
+        const res = await fetch('/v1/gallery');
+        if (!res.ok) throw new Error('failed');
+        const data = await res.json();
+        const items = data.items || [];
+        status.textContent = '';
+        if (!items.length) {
+          renderEmpty(root);
+          return;
+        }
+        const groups = new Map();
+        for (const item of items) {
+          if (!groups.has(item.book_id)) groups.set(item.book_id, []);
+          groups.get(item.book_id).push(item);
+        }
+        for (const arr of groups.values()) {
+          arr.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        }
+        const bookMetas = await Promise.all(Array.from(groups.keys()).map(id => fetchBookMeta(id)));
+        const metaById = new Map(bookMetas.map(m => [m.id, m]));
+        const ordered = Array.from(groups.keys()).sort((a, b) => {
+          const latestA = groups.get(a)[0]?.created_at || 0;
+          const latestB = groups.get(b)[0]?.created_at || 0;
+          return new Date(latestB) - new Date(latestA);
+        });
+        for (const bookId of ordered) {
+          const section = document.createElement('section');
+          section.className = 'space-y-3';
+          const header = document.createElement('div');
+          header.className = 'space-y-1';
+          const meta = metaById.get(bookId) || { title: `作品ID: ${bookId}`, author: '', era: '' };
+          const titleRow = document.createElement('div'); titleRow.className = 'flex flex-wrap items-baseline gap-x-3 gap-y-1';
+          const title = document.createElement('div'); title.className = 'text-lg font-semibold text-gray-900'; title.textContent = meta.title || `作品ID: ${bookId}`;
+          titleRow.appendChild(title);
+          const subtitleParts = [meta.author, meta.era].filter(Boolean);
+          if (subtitleParts.length) {
+            const subtitle = document.createElement('div'); subtitle.className = 'text-sm text-gray-500'; subtitle.textContent = subtitleParts.join(' / ');
+            titleRow.appendChild(subtitle);
+          }
+          header.appendChild(titleRow);
+          section.appendChild(header);
+
+          const grid = document.createElement('div');
+          grid.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4';
+          const itemsForBook = groups.get(bookId) || [];
+          for (const item of itemsForBook) {
+            if (item.type === 'video') {
+              grid.appendChild(createVideoCard(item));
+            } else {
+              grid.appendChild(createImageCard(item, openPreview));
+            }
+          }
+          section.appendChild(grid);
+          root.appendChild(section);
+        }
+      } catch (e) {
+        status.textContent = 'ギャラリーの取得に失敗しました。時間をおいて再度お試しください。';
+        root.innerHTML = '';
+      }
+    }
+
+    function openPreview(item) {
+      const dialog = document.getElementById('image-preview');
+      const img = document.getElementById('preview-img');
+      const caption = document.getElementById('preview-caption');
+      if (!dialog || !img || !caption) return;
+      img.src = item.asset_url;
+      img.alt = item.prompt ? item.prompt : '挿絵';
+      caption.textContent = item.prompt || '';
+      dialog.showModal();
+    }
+
+    function closePreview() {
+      const dialog = document.getElementById('image-preview');
+      if (dialog && dialog.open) dialog.close();
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const dialog = document.getElementById('image-preview');
+      if (dialog) {
+        dialog.addEventListener('click', (event) => {
+          if (event.target === dialog) closePreview();
+        });
+      }
+      loadGallery();
+    });
+  </script>
+</head>
+
+<body>
+  <header
+    class="sticky top-0 z-20 bg-white/90 backdrop-blur h-14 border-b border-gray-100 shadow-sm px-4 flex items-center gap-3"
+    style="--header-h: 56px;">
+    <a href="/web/search.html" aria-label="戻る"
+      class="inline-flex items-center gap-1.5 text-sky-600 hover:text-sky-700 rounded-lg px-2 py-1 transition">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+      </svg>
+      <span class="hidden sm:inline">戻る</span>
+    </a>
+    <div class="flex-1 flex items-center">
+      <div class="text-base font-semibold text-gray-900">ギャラリー</div>
+    </div>
+  </header>
+  <main class="container mx-auto max-w-screen-xl">
+    <div class="p-4 space-y-6">
+      <div id="gallery-status" class="text-sm text-gray-500"></div>
+      <div id="gallery-sections" class="space-y-8"></div>
+    </div>
+  </main>
+
+  <dialog id="image-preview" class="rounded max-w-3xl w-[92vw]">
+    <div class="p-4 space-y-3">
+      <div class="flex flex-wrap items-start gap-4">
+        <div class="text-sm text-gray-600 flex-1 min-w-0" id="preview-caption"></div>
+        <button class="px-4 py-1.5 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap flex-shrink-0"
+          onclick="closePreview()">閉じる</button>
+      </div>
+      <img id="preview-img" src="" alt="" class="max-h-[70vh] w-full object-contain rounded" />
+    </div>
+  </dialog>
+</body>
+
+</html>
