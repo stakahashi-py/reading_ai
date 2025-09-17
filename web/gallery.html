@@ -65,16 +65,21 @@
     function createImageCard(item, onPreview) {
       const card = document.createElement('button');
       card.type = 'button';
-      card.className = 'relative group border border-gray-100 rounded-lg overflow-hidden text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-300';
+      card.className = 'group border border-gray-100 rounded-lg overflow-hidden text-left shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-300 flex flex-col';
+
+      const figure = document.createElement('div');
+      figure.className = 'relative w-full overflow-hidden bg-gray-100';
+      figure.style.aspectRatio = '1 / 1';
       const img = document.createElement('img');
       img.src = item.thumb_url || item.asset_url;
       img.alt = item.prompt ? compact(item.prompt) : '挿絵';
       img.loading = 'lazy';
-      img.className = 'w-full h-48 object-cover';
-      card.appendChild(img);
+      img.className = 'absolute inset-0 w-full h-full object-cover';
+      figure.appendChild(img);
+      card.appendChild(figure);
 
       const meta = document.createElement('div');
-      meta.className = 'p-3 space-y-1';
+      meta.className = 'p-3 space-y-1 flex-1';
       const label = document.createElement('div'); label.className = 'text-xs font-semibold text-sky-600'; label.textContent = '挿絵';
       const time = document.createElement('div'); time.className = 'text-xs text-gray-500'; time.textContent = formatDate(item.created_at);
       const prompt = document.createElement('div'); prompt.className = 'text-sm text-gray-700 line-clamp-2'; prompt.textContent = item.prompt ? item.prompt : '';
@@ -89,18 +94,19 @@
 
     function createVideoCard(item) {
       const wrap = document.createElement('div');
-      wrap.className = 'border border-gray-100 rounded-lg overflow-hidden shadow-sm';
+      wrap.className = 'border border-gray-100 rounded-lg overflow-hidden shadow-sm flex flex-col';
       const video = document.createElement('video');
       video.src = item.asset_url;
       video.controls = true;
       video.playsInline = true;
       video.preload = 'metadata';
-      video.className = 'w-full h-48 object-cover bg-black';
+      video.className = 'w-full bg-black';
+      video.style.aspectRatio = '16 / 9';
       if (item.thumb_url) { video.poster = item.thumb_url; }
       wrap.appendChild(video);
 
       const meta = document.createElement('div');
-      meta.className = 'p-3 space-y-1';
+      meta.className = 'p-3 space-y-1 flex-1';
       const label = document.createElement('div'); label.className = 'text-xs font-semibold text-purple-600'; label.textContent = '動く挿絵';
       const time = document.createElement('div'); time.className = 'text-xs text-gray-500'; time.textContent = formatDate(item.created_at);
       const prompt = document.createElement('div'); prompt.className = 'text-sm text-gray-700 line-clamp-2'; prompt.textContent = item.prompt ? item.prompt : '';
