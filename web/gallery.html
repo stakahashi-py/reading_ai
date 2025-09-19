@@ -125,13 +125,16 @@
       root.appendChild(box);
     }
 
-    async function loadGallery() {
+    async function loadGallery(helper) {
       const status = document.getElementById('gallery-status');
       const root = document.getElementById('gallery-sections');
       status.textContent = '読み込み中…';
       root.innerHTML = '';
       try {
-        const res = await fetch('/v1/gallery');
+        const token = helper && helper.getIdToken ? await helper.getIdToken(false) : null;
+        if (!token) throw new Error('認証情報を取得できませんでした。ログインし直してください。');
+        const headers = { 'Authorization': 'Bearer ' + token };
+        const res = await fetch('/v1/gallery', { headers });
         if (!res.ok) throw new Error('failed');
         const data = await res.json();
         const items = data.items || [];
@@ -207,15 +210,75 @@
       if (dialog && dialog.open) dialog.close();
     }
 
-    window.addEventListener('DOMContentLoaded', () => {
+    function waitForHelper() {
+      return new Promise((resolve, reject) => {
+        if (window.firebaseAuthHelper && window.firebaseAuthHelper.auth) {
+          resolve(window.firebaseAuthHelper);
+          return;
+        }
+        const cleanup = () => {
+          document.removeEventListener('firebase-auth-ready', onReady);
+          clearInterval(intervalId);
+          clearTimeout(timeoutId);
+        };
+        const onReady = (ev) => {
+          cleanup();
+          if (ev && ev.detail && ev.detail.helper && ev.detail.helper.auth) {
+            resolve(ev.detail.helper);
+          } else if (window.firebaseAuthHelper && window.firebaseAuthHelper.auth) {
+            resolve(window.firebaseAuthHelper);
+          } else {
+            reject(new Error('Firebase 認証の初期化に失敗しました。'));
+          }
+        };
+        const check = () => {
+          if (window.firebaseAuthHelper && window.firebaseAuthHelper.auth) {
+            cleanup();
+            resolve(window.firebaseAuthHelper);
+          } else if (window.firebaseInitError) {
+            cleanup();
+            reject(new Error(window.firebaseInitError));
+          }
+        };
+        document.addEventListener('firebase-auth-ready', onReady);
+        const intervalId = setInterval(check, 200);
+        const timeoutId = setTimeout(() => {
+          cleanup();
+          if (window.firebaseAuthHelper && window.firebaseAuthHelper.auth) {
+            resolve(window.firebaseAuthHelper);
+          } else {
+            reject(new Error('Firebase 認証の初期化がタイムアウトしました。'));
+          }
+        }, 5000);
+      });
+    }
+
+    async function bootGallery() {
       const dialog = document.getElementById('image-preview');
       if (dialog) {
         dialog.addEventListener('click', (event) => {
           if (event.target === dialog) closePreview();
         });
       }
-      loadGallery();
-    });
+      const status = document.getElementById('gallery-status');
+      try {
+        const helper = await waitForHelper();
+        const user = helper && helper.auth ? (helper.auth.currentUser || await helper.waitForUser()) : null;
+        if (!user) {
+          const redirect = '/web/index.html?redirect=' + encodeURIComponent(location.pathname + location.search);
+          location.replace(redirect);
+          return;
+        }
+        await loadGallery(helper);
+      } catch (err) {
+        console.error('[gallery] init failed', err);
+        if (status) {
+          status.textContent = err && err.message ? err.message : 'ギャラリーの取得に失敗しました。認証情報を確認してください。';
+        }
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', bootGallery);
   </script>
 </head>
 
