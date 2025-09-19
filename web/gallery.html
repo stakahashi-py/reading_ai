@@ -143,20 +143,40 @@
           renderEmpty(root);
           return;
         }
+        const paraKey = (item) => {
+          const ids = item && item.meta && Array.isArray(item.meta.paragraph_ids)
+            ? item.meta.paragraph_ids.map(Number).filter((n) => Number.isFinite(n))
+            : [];
+          if (ids.length) return Math.min(...ids);
+          const fallback = Number(new Date(item.created_at || 0).getTime());
+          return Number.isFinite(fallback) ? fallback : Number.MAX_SAFE_INTEGER;
+        };
+
         const groups = new Map();
         for (const item of items) {
           if (!groups.has(item.book_id)) groups.set(item.book_id, []);
           groups.get(item.book_id).push(item);
         }
-        for (const arr of groups.values()) {
-          arr.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        const bookOrderKey = new Map();
+        for (const [bookId, arr] of groups.entries()) {
+          arr.sort((a, b) => {
+            const ak = paraKey(a);
+            const bk = paraKey(b);
+            if (ak !== bk) return ak - bk;
+            return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+          });
+          const first = arr[0];
+          bookOrderKey.set(bookId, first ? paraKey(first) : Number.MAX_SAFE_INTEGER);
         }
         const bookMetas = await Promise.all(Array.from(groups.keys()).map(id => fetchBookMeta(id)));
         const metaById = new Map(bookMetas.map(m => [m.id, m]));
         const ordered = Array.from(groups.keys()).sort((a, b) => {
-          const latestA = groups.get(a)[0]?.created_at || 0;
-          const latestB = groups.get(b)[0]?.created_at || 0;
-          return new Date(latestB) - new Date(latestA);
+          const ka = bookOrderKey.get(a) ?? Number.MAX_SAFE_INTEGER;
+          const kb = bookOrderKey.get(b) ?? Number.MAX_SAFE_INTEGER;
+          if (ka !== kb) return ka - kb;
+          const createdA = new Date(groups.get(a)[0]?.created_at || 0).getTime();
+          const createdB = new Date(groups.get(b)[0]?.created_at || 0).getTime();
+          return createdA - createdB;
         });
         for (const bookId of ordered) {
           const section = document.createElement('section');
@@ -165,14 +185,19 @@
           header.className = 'space-y-1';
           const meta = metaById.get(bookId) || { title: `作品ID: ${bookId}`, author: '', era: '' };
           const titleRow = document.createElement('div'); titleRow.className = 'flex flex-wrap items-baseline gap-x-3 gap-y-1';
-          const title = document.createElement('div'); title.className = 'text-lg font-semibold text-gray-900'; title.textContent = meta.title || `作品ID: ${bookId}`;
-          titleRow.appendChild(title);
+          const titleLink = document.createElement('a');
+          titleLink.className = 'text-lg font-semibold text-sky-600 hover:text-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-300 rounded';
+          titleLink.href = `/web/read.html?book_id=${bookId}`;
+          titleLink.textContent = meta.title || `作品ID: ${bookId}`;
+          titleLink.setAttribute('data-book-id', bookId);
+          titleLink.setAttribute('data-book-title', meta.title || '');
+          titleRow.appendChild(titleLink);
+          header.appendChild(titleRow);
           const subtitleParts = [meta.author, meta.era].filter(Boolean);
           if (subtitleParts.length) {
             const subtitle = document.createElement('div'); subtitle.className = 'text-sm text-gray-500'; subtitle.textContent = subtitleParts.join(' / ');
-            titleRow.appendChild(subtitle);
+            header.appendChild(subtitle);
           }
-          header.appendChild(titleRow);
           section.appendChild(header);
 
           const grid = document.createElement('div');
