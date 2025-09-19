@@ -28,10 +28,10 @@ app.include_router(v1.router, prefix="/v1")
 # Serve static web (simple MVP)
 app.mount("/web", StaticFiles(directory="web", html=True), name="web")
 
-# Redirect root to search page
+# Redirect root to login page
 @app.get("/", include_in_schema=False)
 def root_redirect():
-    return RedirectResponse(url="/web/search.html")
+    return RedirectResponse(url="/web/index.html")
 
 
 @app.get("/healthz/db")

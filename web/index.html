@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MasterpIece - ログイン</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/web/styles.css" />
+  <link rel="icon" href="/web/favicon.ico">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { accent: '#93c5fd' }
+        }
+      }
+    };
+    window.AUTH_MODE = 'manual';
+  </script>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: linear-gradient(135deg, #f8fafc, #eff6ff);
+    }
+  </style>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.13.1/firebase-auth-compat.js"></script>
+  <script src="/web/auth.js"></script>
+</head>
+
+<body class="min-h-screen">
+  <main class="min-h-screen flex items-center justify-center px-4 py-12">
+    <div class="w-full max-w-md bg-white/90 backdrop-blur shadow-xl rounded-3xl border border-slate-100 p-8">
+      <div class="flex flex-col items-center text-center gap-4">
+        <img src="/web/logo.png" alt="MasterpIece" class="max-w-[200px] h-auto shadow-sm" />
+        <h1 class="text-2xl font-semibold text-slate-800">MasterpIece へようこそ</h1>
+        <p class="text-sm text-slate-500">ご利用のサインイン方法を選択してください。</p>
+      </div>
+      <div class="mt-8 flex flex-col gap-4">
+        <button id="btn-google"
+          class="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 shadow-sm transition hover:border-accent hover:text-accent focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent disabled:opacity-60 disabled:cursor-not-allowed">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="#4285F4"
+              d="M23.49 12.27c0-.78-.07-1.53-.2-2.27H12v4.29h6.46c-.28 1.45-1.13 2.68-2.4 3.51v2.92h3.88c2.27-2.09 3.55-5.17 3.55-8.45z" />
+            <path fill="#34A853"
+              d="M12 24c3.24 0 5.96-1.07 7.95-2.91l-3.88-2.92c-1.08.72-2.47 1.14-4.07 1.14-3.13 0-5.78-2.11-6.73-4.96H1.26v3.11C3.23 21.53 7.3 24 12 24z" />
+            <path fill="#FBBC05" d="M5.27 14.35a7.2 7.2 0 0 1 0-4.7V6.54H1.26a12 12 0 0 0 0 10.92l4.01-3.11z" />
+            <path fill="#EA4335"
+              d="M12 4.75c1.76 0 3.34.6 4.58 1.78l3.42-3.42C17.96 1.18 15.24 0 12 0 7.3 0 3.23 2.47 1.26 6.54l4.01 3.11C6.22 6.86 8.87 4.75 12 4.75z" />
+          </svg>
+          <span>Google でログイン</span>
+        </button>
+        <button id="btn-anonymous"
+          class="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-accent/90 px-4 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent disabled:opacity-60 disabled:cursor-not-allowed">
+          ゲストとして利用する
+        </button>
+      </div>
+      <p id="login-status" class="mt-6 text-center text-sm text-slate-500">初めての方はお好きな方法でログインしてください。</p>
+    </div>
+  </main>
+  <script src="/web/login.js"></script>
+</body>
+
+</html>

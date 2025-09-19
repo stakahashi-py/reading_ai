@@ -29,64 +29,138 @@
   const init = async () => {
     if (!(window.firebase && firebase.app)) {
       console.error('[auth] Firebase SDK not loaded');
+      window.firebaseInitError = 'Firebase SDK が読み込まれていません。ネットワークやアドブロッカーをご確認ください。';
       return;
     }
     const cfg = await loadConfig();
     if (!cfg) {
       console.error('[auth] Firebase config not found');
+      window.firebaseInitError = 'Firebase 設定ファイルが取得できません。ファイルの配置とパスを確認してください。';
       return;
     }
-    if (!firebase.apps.length) firebase.initializeApp(cfg);
+    try {
+      if (!firebase.apps.length) firebase.initializeApp(cfg);
+    } catch (e) {
+      console.error('[auth] Firebase initializeApp failed', e);
+      window.firebaseInitError = `Firebase 初期化時にエラーが発生しました: ${e && e.message ? e.message : e}`;
+      return;
+    }
+    window.firebaseInitError = null;
     const auth = firebase.auth();
 
-    // Auth mode: 'auto' (default) | 'anonymous' | 'google'
+    // Auth mode: 'auto' (default) | 'anonymous' | 'google' | 'manual'
     // - auto: try anonymous; if disallowed, fallback to Google redirect
+    // - manual: expose helper functions but skip automatic sign-in
     const elCfg = document.getElementById('firebase-config');
     const dataAttrMode = elCfg && elCfg.getAttribute('data-auth-mode');
-    const MODE = (window.AUTH_MODE || dataAttrMode || 'auto').toLowerCase();
+    const rawMode = (window.AUTH_MODE || dataAttrMode || 'auto').toLowerCase();
+    const MODE = ['auto', 'anonymous', 'google', 'manual'].includes(rawMode) ? rawMode : 'auto';
+
+    const onceAuthState = () => new Promise((resolve) => {
+      const off = auth.onAuthStateChanged((u) => { off(); resolve(u); });
+    });
+
+    const waitForUser = () => new Promise((resolve) => {
+      const existing = auth.currentUser;
+      if (existing) {
+        resolve(existing);
+        return;
+      }
+      const off = auth.onAuthStateChanged((u) => {
+        if (u) {
+          off();
+          resolve(u);
+        }
+      });
+    });
+
+    const signInWithGoogle = async ({ usePopup = false } = {}) => {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      if (usePopup && auth.signInWithPopup) {
+        try {
+          const res = await auth.signInWithPopup(provider);
+          return res.user;
+        } catch (e) {
+          if (e && (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment')) {
+            // ブロックされた場合のみリダイレクトにフォールバック
+            await auth.signInWithRedirect(provider);
+            return null;
+          }
+          throw e;
+        }
+      }
+      await auth.signInWithRedirect(provider);
+      return null;
+    };
+
+    const signInAnonymously = async () => {
+      await auth.signInAnonymously();
+      return await waitForUser();
+    };
 
     const ensureSignedIn = async () => {
-      const current = auth.currentUser || await new Promise((resolve) => {
-        const off = auth.onAuthStateChanged((u) => { off(); resolve(u); });
-      });
+      const current = auth.currentUser || await onceAuthState();
       if (current) return current;
 
-      const loginWithGoogle = async () => {
-        try {
-          const provider = new firebase.auth.GoogleAuthProvider();
-          await auth.signInWithRedirect(provider);
-        } catch (e) {
-          console.error('[auth] Google sign-in redirect failed:', e);
-        }
+      if (MODE === 'manual') {
         return null;
-      };
+      }
 
       if (MODE === 'google') {
-        return await loginWithGoogle();
+        try {
+          await signInWithGoogle({ usePopup: false });
+          return await waitForUser();
+        } catch (e) {
+          console.error('[auth] Google sign-in redirect failed:', e);
+          return null;
+        }
       }
 
       // anonymous or auto
       try {
-        await auth.signInAnonymously();
-        return auth.currentUser;
+        await signInAnonymously();
+        return await waitForUser();
       } catch (e) {
         // Anonymous disabled → fallback to Google on auto
         if (MODE === 'auto' && (e && (e.code === 'auth/operation-not-allowed' || e.code === 'auth/admin-restricted-operation'))) {
-          return await loginWithGoogle();
+          try {
+            await signInWithGoogle({ usePopup: false });
+            return await waitForUser();
+          } catch (ge) {
+            console.error('[auth] Google sign-in redirect failed:', ge);
+            return null;
+          }
         }
         console.warn('[auth] Anonymous sign-in failed:', e);
         return null;
       }
     };
 
-    await ensureSignedIn();
+    if (MODE !== 'manual') {
+      await ensureSignedIn();
+    }
 
     // Expose a promise for readiness
-    window.firebaseReady = (async () => {
-      return await new Promise((resolve) => {
-        const off = auth.onAuthStateChanged((u) => { off(); resolve(u); });
-      });
-    })();
+    window.firebaseReady = waitForUser();
+
+    const helper = window.firebaseAuthHelper || {};
+    helper.mode = MODE;
+    helper.auth = auth;
+    helper.ensureSignedIn = ensureSignedIn;
+    helper.signInWithGoogle = signInWithGoogle;
+    helper.signInAnonymously = signInAnonymously;
+    helper.waitForUser = waitForUser;
+    helper.onceAuthState = onceAuthState;
+    helper.signOut = () => auth.signOut();
+    helper.getIdToken = async (forceRefresh = false) => {
+      const user = auth.currentUser || await waitForUser();
+      return user ? await user.getIdToken(forceRefresh) : null;
+    };
+    helper.getConfig = () => cfg;
+    window.firebaseAuthHelper = helper;
+    try {
+      document.dispatchEvent(new CustomEvent('firebase-auth-ready', { detail: { helper } }));
+    } catch (_) {}
 
     // Wrap fetch to attach ID token for API calls
     const origFetch = window.fetch.bind(window);
