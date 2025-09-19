@@ -161,7 +161,7 @@
 
     // 初期表示：未検索なら 読書中→読了→未読 の順に並べる
     async function loadInitialRanking() {
-      const res = await fetch('/v1/books?offset=0&limit=100');
+      const res = await fetch('/v1/books?offset=0&limit=200');
       const data = await res.json();
       const items = data.items || [];
       // 進捗を一括取得

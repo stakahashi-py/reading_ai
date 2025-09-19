@@ -17,7 +17,7 @@ def list_books(
     era: Optional[str] = None,
     q: Optional[str] = None,
     offset: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=200),
     db: Session = Depends(get_db),
     user=Depends(get_current_user_optional),
 ):
@@ -30,10 +30,14 @@ def list_books(
         # interpret as tag
         query = query.filter(Book.tags.any(genre))
     if q:
-        query = query.filter(or_(Book.title.ilike(f"%{q}%"), Book.author.ilike(f"%{q}%")))
+        query = query.filter(
+            or_(Book.title.ilike(f"%{q}%"), Book.author.ilike(f"%{q}%"))
+        )
     try:
         total = query.count()
-        rows: List[Book] = query.order_by(Book.created_at.desc()).offset(offset).limit(limit).all()
+        rows: List[Book] = (
+            query.order_by(Book.created_at.desc()).offset(offset).limit(limit).all()
+        )
         items = [
             {
                 "id": b.id,
@@ -50,7 +54,13 @@ def list_books(
         return {"items": items, "offset": offset, "limit": limit, "total": total}
     except Exception as e:
         # Graceful fallback when DB is not reachable in dev
-        return {"items": [], "offset": offset, "limit": limit, "total": 0, "error": str(e)}
+        return {
+            "items": [],
+            "offset": offset,
+            "limit": limit,
+            "total": 0,
+            "error": str(e),
+        }
 
 
 @router.get("/{book_id}")
@@ -87,12 +97,31 @@ def get_paragraphs(
         total = q.count()
         rows = q.offset(offset).limit(limit).all()
         items = [
-            {"id": p.id, "idx": p.idx, "text": p.text, "char_start": p.char_start, "char_end": p.char_end}
+            {
+                "id": p.id,
+                "idx": p.idx,
+                "text": p.text,
+                "char_start": p.char_start,
+                "char_end": p.char_end,
+            }
             for p in rows
         ]
-        return {"book_id": book_id, "offset": offset, "limit": limit, "total": total, "items": items}
+        return {
+            "book_id": book_id,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "items": items,
+        }
     except Exception as e:
-        return {"book_id": book_id, "offset": offset, "limit": limit, "total": 0, "items": [], "error": str(e)}
+        return {
+            "book_id": book_id,
+            "offset": offset,
+            "limit": limit,
+            "total": 0,
+            "items": [],
+            "error": str(e),
+        }
 
 
 @router.get("/{book_id}/para_index")
@@ -109,5 +138,3 @@ def get_para_index(book_id: int, db: Session = Depends(get_db)):
         return {"book_id": book_id, "items": items}
     except Exception as e:
         return {"book_id": book_id, "items": [], "error": str(e)}
-
- 
