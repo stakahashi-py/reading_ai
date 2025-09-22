@@ -7,7 +7,7 @@
 
 ## 主なスタック
 - FastAPI / SQLAlchemy / Pydantic v2
-- Cloud SQL （PostgreSQL 15 + pgvector）
+- Cloud SQL （PostgreSQL 15 + pgvector・pg_trgm）
 - google-genai（Gemini 2.5 / Imagen / Veo）・Vertex AI・Google Cloud Storage
 - Firebase Auth（ローカルでは `AUTH_DISABLED=true` で無効化可）
 - Google ADK Agents（外部 Librarian エージェント）
@@ -48,3 +48,17 @@
    - `web/books_html/<slug>.html` を生成し、フロントから段落単位で読み込めるようにする。（ローディング高速化のため）
 9. **底本情報の追記** (`09_patch_books_html_citation.py`)
    - `aozora_html/` の底本情報を HTML 最終段落に差し込む。
+
+## API詳細
+- `apps/api/routers/v1/books.py`: 書誌一覧・詳細・段落取得を提供し、著者/タグ/時代のフィルタや段落インデックスAPIも備える。
+- `apps/api/routers/v1/feedback.py`: ユーザーのフィードバックを作成・取得・更新する CRUD エンドポイント。
+- `apps/api/routers/v1/gallery.py`: 生成した画像・動画アセットの履歴参照と削除を担当し、書籍IDでの絞り込みも可能。
+- `apps/api/routers/v1/generate.py`: 挿絵/動画生成とジョブ状態確認をまとめ、Gemini→Imagen→Veo のワークフローや GCS アップロードを実装。
+- `apps/api/routers/v1/highlights.py`: 段落ハイライトの追加・一覧・削除を提供し、抜粋テキストを保存する。
+- `apps/api/routers/v1/librarian_proxy.py`: 外部 Librarian エージェントへのセッション初期化と SSE ストリーミングをプロキシする。
+- `apps/api/routers/v1/progress.py`: 読書進捗の保存・読了記録・取得・一括取得を扱い、スクロール率や最終段落を管理。
+- `apps/api/routers/v1/qa.py`: 書籍タイトルを文脈に渡して Q&A を実行し、LLM からの回答を返す。
+- `apps/api/routers/v1/recommendations.py`: レコメンド結果返却用のプレースホルダ（現状は空配列を返す）。
+- `apps/api/routers/v1/search.py`: タイトル特化検索を提供し、完全一致優先＋pg_trgm 類似度で結果をソート。
+- `apps/api/routers/v1/translate.py`: 指定段落の現代語訳を生成し、翻訳結果を `translations` テーブルに保存。
+- `apps/api/routers/v1/translations.py`: ユーザーが保存した翻訳履歴を一覧取得する読み出し専用エンドポイント。
