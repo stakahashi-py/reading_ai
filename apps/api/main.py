@@ -1,9 +1,15 @@
-from fastapi import FastAPI
+import os
+
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from .db.session import engine
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from .routers import api_v1 as v1
 
@@ -42,3 +48,19 @@ def healthz_db():
         return {"status": "ok"}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+
+@app.get("/firebase-config.json", include_in_schema=False)
+def firebase_config():
+    cfg = {
+        "apiKey": os.getenv("FIREBASE_API_KEY"),
+        "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
+        "projectId": os.getenv("FIREBASE_PROJECT_ID"),
+        "appId": os.getenv("FIREBASE_APP_ID"),
+        "messagingSenderId": os.getenv("FIREBASE_MESSAGING_SENDER_ID"),
+        "measurementId": os.getenv("FIREBASE_MEASUREMENT_ID"),
+    }
+    # apiKey と projectId が無い場合は未設定とみなす
+    if not cfg["apiKey"] or not cfg["projectId"]:
+        raise HTTPException(status_code=404, detail="Firebase config not configured")
+    return cfg
