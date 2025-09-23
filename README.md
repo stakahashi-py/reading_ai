@@ -64,7 +64,7 @@
 - `apps/api/routers/v1/translations.py`: ユーザーが保存した翻訳履歴を一覧取得する読み出し専用エンドポイント。
 
 ## Third-Party Notices / OSS Licenses
-本プロダクトは、以下のオープンソースソフトウェアを利用しています。
-- ライセンス一覧: [licenses/THIRD_PARTY_LICENSES.md](licenses/THIRD_PARTY_LICENSES.md)
-また、作品の本文は、青空文庫様から著作権が切れた作品のみを、利用規約に基づき利用しています。
+- 本プロダクトは、以下のオープンソースソフトウェアを利用しています。
+   - ライセンス一覧: [licenses/THIRD_PARTY_LICENSES.md](licenses/THIRD_PARTY_LICENSES.md)
+- また、作品の本文は、青空文庫様から著作権が切れた作品のみを、利用規約に基づき利用しています。
 （https://www.aozora.gr.jp/guide/kijyunn.html）
