@@ -62,3 +62,9 @@
 - `apps/api/routers/v1/search.py`: タイトル特化検索を提供し、完全一致優先＋pg_trgm 類似度で結果をソート。
 - `apps/api/routers/v1/translate.py`: 指定段落の現代語訳を生成し、翻訳結果を `translations` テーブルに保存。
 - `apps/api/routers/v1/translations.py`: ユーザーが保存した翻訳履歴を一覧取得する読み出し専用エンドポイント。
+
+## Third-Party Notices / OSS Licenses
+本プロダクトは、以下のオープンソースソフトウェアを利用しています。
+- ライセンス一覧: [licenses/THIRD_PARTY_LICENSES.md](licenses/THIRD_PARTY_LICENSES.md)
+また、作品の本文は、青空文庫様から著作権が切れた作品のみを、利用規約に基づき利用しています。
+（https://www.aozora.gr.jp/guide/kijyunn.html）
