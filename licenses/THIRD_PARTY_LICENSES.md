@@ -1,3 +1,5 @@
+## Python Libraries
+
 | Name                               | Version     | License                                       | URL                                                                                                                 |
 | ---------------------------------- | ----------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Authlib                            | 1.6.4       | BSD License                                   | https://github.com/authlib/authlib                                                                                  |
@@ -122,3 +124,11 @@
 | websockets                         | 15.0.1      | BSD License                                   | https://github.com/python-websockets/websockets                                                                     |
 | yarl                               | 1.20.1      | Apache Software License                       | https://github.com/aio-libs/yarl                                                                                    |
 | zipp                               | 3.23.0      | MIT                                           | https://github.com/jaraco/zipp                                                                                      |
+
+## Docker environment
+- **Base Image:** python:3.11-slim
+    - このイメージは **Debian GNU/Linux** をベースにしており、様々なオープンソースライセンスのソフトウェアを含んでいます。加えて、Debian公式パッケージのbuild-essentialメタパッケージをインストールしています。（技術的な詳細: 各パッケージのライセンスはコンテナ内の /usr/share/doc/*/copyright で確認できます。）
+
+    - より詳しい情報については、以下の公式ページをご参照ください。
+    **Docker Hub:** https://hub.docker.com/_/python
+
